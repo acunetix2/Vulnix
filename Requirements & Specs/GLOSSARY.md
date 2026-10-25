@@ -1,0 +1,24 @@
+# Glossary
+
+- **AI-assisted explanation:** Model-generated summary or remediation guidance grounded in scanner evidence; not a guarantee.
+- **Archive traversal / ZIP slip:** A malicious archive entry that attempts to write files outside the intended extraction directory.
+- **Confidence:** A qualitative estimate of how strongly the evidence supports a finding. It is not automatically a calibrated probability.
+- **CVE:** Common Vulnerabilities and Exposures identifier for a publicly disclosed vulnerability.
+- **CWE:** Common Weakness Enumeration category for a class of software weakness.
+- **Dependency vulnerability:** A known security issue associated with a library/package version used by a project.
+- **False positive:** A finding that, after review, does not represent the claimed issue in the given context.
+- **Finding:** A normalized security issue or suspicious pattern reported by a scanner.
+- **Fingerprint:** Stable identifier used to recognize the same finding across repeated scans.
+- **IDOR / BOLA:** Broken object-level authorization, where a user accesses an object they are not permitted to access.
+- **Prompt injection:** Untrusted content attempts to manipulate an AI model's behavior, for example by including instructions in source comments.
+- **Remediation:** Recommended steps to address or reduce a finding.
+- **SAST:** Static Application Security Testing; analysis of source or compiled artifacts without executing the application.
+- **SBOM:** Software Bill of Materials; inventory of software components and dependencies.
+- **Secret scanning:** Detection of possible credentials, tokens, keys, or other sensitive values in code and history.
+- **Severity:** Priority category such as critical, high, medium, low, or informational. Mapping varies by tool and context.
+- **Static analysis:** Inspection of code or artifacts without running the target application.
+- **Tenant isolation:** Ensuring users of one workspace cannot access another workspace's data.
+- **Tool run:** One execution of a scanner within a scan job.
+- **Triage:** Reviewing a finding and deciding whether it remains open, is fixed, is a false positive, or is an accepted risk.
+- **Vulnerability:** A weakness that can be exploited to violate confidentiality, integrity, or availability.
+- **Worker:** Background service that performs scans outside the public API process.

@@ -1,0 +1,282 @@
+## Vulnix — Complete Frontend Pages List
+
+### A. Public Pages
+
+1. Landing Page
+2. Features
+3. Pricing
+4. Documentation
+5. Security & Privacy
+6. About
+7. Contact
+8. Login
+9. Register
+10. Forgot Password
+11. Reset Password
+12. Email Verification
+13. Verification Success
+14. Terms of Service
+15. Privacy Policy
+16. Cookie Policy
+17. Responsible Disclosure Policy
+
+### B. Main Dashboard
+
+18. Security Overview
+19. Projects
+20. Create Project
+21. Project Details
+22. Edit Project
+23. Project Settings
+24. Project Members
+25. Project Activity
+26. Global Search
+27. Notifications
+28. Recent Activity
+
+### C. Scanning
+
+29. All Scans
+30. New Scan
+31. Source Code Upload
+32. Repository Selection
+33. Scan Configuration
+34. Scan Progress
+35. Scan Details
+36. Scan Results
+37. Scan History
+38. Scan Comparison
+39. Failed Scans
+40. Scan Queue
+41. Scheduled Scans
+42. Scan Configuration Templates
+
+### D. Security Findings
+
+43. Findings Explorer
+44. Finding Details
+45. Critical Findings
+46. High-Severity Findings
+47. Medium-Severity Findings
+48. Low-Severity Findings
+49. Informational Findings
+50. New Findings
+51. Resolved Findings
+52. Recurring Findings
+53. Suppressed Findings
+54. False-Positive Review
+55. Triage Queue
+56. Bulk Findings Review
+57. Finding Comments
+58. Finding Assignment
+59. Finding History
+60. Saved Filters
+
+### E. AI Security Analysis
+
+61. AI Security Review
+62. AI Code Review
+63. AI Security Assistant
+64. AI Finding Explanation
+65. AI Risk Prioritization
+66. AI False-Positive Analysis
+67. AI Remediation Suggestions
+68. AI Patch Review
+69. AI Fix Verification
+70. AI Analysis History
+71. AI Model Configuration
+72. AI Usage and Limits
+73. AI Evaluation Dashboard
+
+### F. Remediation
+
+74. Remediation Dashboard
+75. Remediation Details
+76. Code Diff Viewer
+77. Suggested Fix Review
+78. Fix Approval
+79. Fix Verification Results
+80. Remediation History
+81. Remediation Tasks
+82. Remediation Progress
+
+### G. Security Engines
+
+83. Scanner Overview
+84. Scanner Configuration
+85. Semgrep Configuration
+86. Gitleaks Configuration
+87. Bandit Configuration
+88. Dependency Scanner Configuration
+89. Trivy Configuration
+90. Scanner Rules
+91. Scanner Health
+92. Scanner Execution Logs
+93. Scanner Coverage
+94. Scanner Error Details
+
+### H. Dependency Security
+
+95. Dependency Dashboard
+96. Dependency Explorer
+97. Vulnerable Dependencies
+98. Dependency Details
+99. Software Bill of Materials (SBOM)
+100. Dependency Risk Analysis
+101. Dependency Update Recommendations
+
+### I. Secret Detection
+
+102. Secrets Dashboard
+103. Detected Secrets
+104. Secret Finding Details
+105. Secret Exposure History
+106. Secret Remediation Guide
+
+### J. Reports and Analytics
+
+107. Reports Dashboard
+108. Generate Report
+109. Report Details
+110. Downloadable Reports
+111. Executive Security Summary
+112. Technical Security Report
+113. Vulnerability Trends
+114. Risk Trends
+115. Remediation Metrics
+116. Scan Performance Analytics
+117. Export History
+
+### K. Integrations
+
+118. Integrations Overview
+119. GitHub Integration
+120. GitLab Integration
+121. Bitbucket Integration
+122. Repository Connections
+123. Repository Details
+124. CI/CD Integration
+125. GitHub Actions Setup
+126. GitLab CI Setup
+127. Webhooks
+128. API Integration Guide
+129. Integration Activity
+130. Integration Permissions
+
+### L. Team and Collaboration
+
+131. Team Dashboard
+132. Team Members
+133. Invite Member
+134. Member Details
+135. Roles and Permissions
+136. Teams and Groups
+137. Team Activity
+138. Shared Projects
+139. Collaboration Settings
+
+### M. Notifications
+
+140. Notifications Center
+141. Notification Details
+142. Notification Preferences
+143. Email Notification Settings
+144. Security Alert Rules
+145. Alert History
+
+### N. Account Settings
+
+146. User Profile
+147. Edit Profile
+148. Account Preferences
+149. Appearance Settings
+150. Theme Settings
+151. Language Settings
+152. Password Settings
+153. Multi-Factor Authentication
+154. Active Sessions
+155. Login History
+156. Connected Accounts
+157. Personal API Keys
+158. Account Data Export
+159. Delete Account
+
+### O. Organization Settings
+
+160. Organization Overview
+161. Organization Profile
+162. Organization Members
+163. Organization Roles
+164. Organization Security Policies
+165. Organization Scan Defaults
+166. Organization AI Policies
+167. Organization Integrations
+168. Organization Audit Logs
+169. Organization Data Retention
+170. Organization Usage and Limits
+
+### P. Administration
+
+171. Admin Dashboard
+172. User Management
+173. User Details
+174. Organization Management
+175. Project Management
+176. Scan Job Management
+177. Worker Management
+178. Queue Monitoring
+179. System Health
+180. Service Status
+181. Error Monitoring
+182. Audit Log Explorer
+183. Abuse and Rate-Limit Monitoring
+184. AI Provider Management
+185. AI Cost Monitoring
+186. Platform Configuration
+187. Feature Flags
+188. Maintenance Mode
+
+### Q. Billing and Subscription
+
+189. Subscription Overview
+190. Plans and Pricing
+191. Upgrade Plan
+192. Billing Details
+193. Payment Methods
+194. Invoices
+195. Usage Dashboard
+196. Subscription Management
+197. Cancel Subscription
+198. Payment Status
+
+### R. Developer Resources
+
+199. API Documentation
+200. API Reference
+201. API Keys
+202. API Usage
+203. API Request Logs
+204. Webhook Documentation
+205. SDK Documentation
+206. CLI Documentation
+207. Developer Changelog
+
+### S. System and Error Pages
+
+208. 404 Not Found
+209. 403 Access Denied
+210. 500 Internal Server Error
+211. Service Unavailable
+212. Maintenance Page
+213. Session Expired
+214. Unauthorized Access
+215. Rate Limit Exceeded
+216. Upload Failed
+217. Scan Failed
+218. AI Analysis Failed
+219. Integration Failed
+220. Empty State Pages
+221. Loading States
+222. Offline State
+
+Total: 222 page routes and dedicated page/state entries.
