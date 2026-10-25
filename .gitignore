@@ -1,0 +1,53 @@
+# Local credentials and environment configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+*.pem
+*.p12
+*.pfx
+
+# Saved third-party landing-page bundle contains external assets and API keys
+Requirements & Specs/landing page dsign.html
+Requirements & Specs/landing page dsign_files/
+
+# Local databases, uploads, and scan workspaces
+.data/
+**/.data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# JavaScript
+node_modules/
+dist/
+dist-ssr/
+coverage/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# Local editor and operating-system files
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
