@@ -1,0 +1,22 @@
+{
+  "Results": [
+    {
+      "Target": "requirements.txt",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2023-32681",
+          "PkgName": "requests",
+          "InstalledVersion": "2.19.1",
+          "FixedVersion": "2.31.0",
+          "Severity": "HIGH",
+          "Title": "Leaking Proxy-Authorization header in redirects",
+          "Description": "Requests forwards proxy credentials on redirect."
+        }
+      ]
+    },
+    {
+      "Target": "package-lock.json",
+      "Vulnerabilities": null
+    }
+  ]
+}

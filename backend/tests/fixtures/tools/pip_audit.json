@@ -1,0 +1,20 @@
+{
+  "dependencies": [
+    {
+      "name": "requests",
+      "version": "2.19.1",
+      "vulns": [
+        {
+          "id": "PYSEC-2018-64",
+          "fix_versions": ["2.20.0"],
+          "description": "The Requests package before 2.20.0 allows leakage of Authorization headers."
+        }
+      ]
+    },
+    {
+      "name": "flask",
+      "version": "2.0.0",
+      "vulns": []
+    }
+  ]
+}

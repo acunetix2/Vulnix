@@ -1,0 +1,27 @@
+{
+  "results": [
+    {
+      "filename": "/scan/src/app/util.py",
+      "line_number": 21,
+      "test_id": "B605",
+      "test_name": "start_process_with_a_shell",
+      "issue_severity": "HIGH",
+      "issue_confidence": "MEDIUM",
+      "issue_text": "Starting a process with a shell:True with variable sourcing may lead to command injection.",
+      "code": "subprocess.Popen(cmd, shell=True)",
+      "more_info": "https://bandit.readthedocs.io/en/latest/plugins/b605.html"
+    },
+    {
+      "filename": "/scan/src/app/util.py",
+      "line_number": 44,
+      "test_id": "B303",
+      "test_name": "use_of_md5",
+      "issue_severity": "MEDIUM",
+      "issue_confidence": "HIGH",
+      "issue_text": "Use of insecure MD5 hash for password.",
+      "code": "hashlib.md5(password)",
+      "more_info": "https://bandit.readthedocs.io/en/latest/plugins/b303.html"
+    }
+  ],
+  "errors": []
+}

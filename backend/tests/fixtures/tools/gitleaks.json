@@ -1,0 +1,20 @@
+[
+  {
+    "RuleID": "aws-access-token",
+    "File": "config/settings.py",
+    "StartLine": 12,
+    "EndLine": 12,
+    "Secret": "AKIA1234567890ABCDEF",
+    "Match": "AKIA********************",
+    "Description": "AWS Access Key ID"
+  },
+  {
+    "RuleID": "generic-api-key",
+    "File": "scripts/deploy.sh",
+    "StartLine": 4,
+    "EndLine": 4,
+    "Secret": "sk_live_0000000000000000",
+    "Match": "sk_live_****************",
+    "Description": "API key"
+  }
+]

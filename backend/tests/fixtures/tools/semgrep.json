@@ -1,0 +1,27 @@
+{
+  "results": [
+    {
+      "check_id": "python.lang.security.audit.subprocess-shell-true",
+      "path": "app/login.py",
+      "start": {"line": 3, "col": 5},
+      "end": {"line": 3, "col": 42},
+      "extra": {
+        "message": "Using shell=True with a variable command may allow command injection.",
+        "lines": "    subprocess.call(cmd, shell=True)",
+        "severity": "ERROR"
+      }
+    },
+    {
+      "check_id": "python.lang.security.audit.hardcoded-password",
+      "path": "app/config.py",
+      "start": {"line": 7, "col": 1},
+      "end": {"line": 7, "col": 30},
+      "extra": {
+        "message": "Hardcoded password detected.",
+        "lines": "PASSWORD = \"hunter2\"",
+        "severity": "WARNING"
+      }
+    }
+  ],
+  "errors": []
+}
