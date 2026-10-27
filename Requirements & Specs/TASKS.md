@@ -169,6 +169,31 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       the page mounted, so a run that failed in about a minute reported `runtime 36m 39s` and the number grew
       with the calendar. It now times to `completed_at` and keeps the ticking clock for live runs only.
       (ADR-020)
+- [x] Make the API answerable from a deployed console origin. `VULNIX_CORS_ALLOW_ORIGINS` is an explicit,
+      exact-origin allowlist and `CORSMiddleware` is mounted only when it is non-empty, with credentials off
+      because the bearer token is set by the console itself. An empty list keeps the dev proxy same-origin, and
+      the middleware sits inside the request-context layer so a preflight still gets the security headers.
+      Covered by `tests/unit/test_cors.py`. (ADR-022)
+- [x] Make the S3 storage backend usable against an S3-compatible bucket. A signing region setting (`auto` for
+      R2, boto3 otherwise refuses to sign), no automatic CRC32 write trailer, a sha256 computed from the bytes
+      this app accepted, and a `put_stream` that hashes in bounded chunks and re-sends from position zero instead
+      of buffering 100 MiB in a 512 MB process. `boto3` floored to the release that accepts those options;
+      `tests/unit/test_storage_s3.py` stubs the module so the assertions run without it installed. (ADR-023)
+- [x] Deploy the backend as a queue, not a request. `render.yaml` defines the API web service, a
+      `--concurrency=1` worker, the beat process and a private Redis, with `/health` as the health check and
+      `alembic upgrade head` as the pre-deploy command. The beat schedule now lives in the Celery app because a
+      delivery in backoff is only ever claimed by that sweep. `backend/requirements.txt` installs the project
+      plus the Postgres and storage extras. (ADR-024)
+- [x] Deploy the console as a static SPA. `frontend/public/_redirects` carries the `/* /index.html 200` fallback
+      the router needs and `frontend/public/_headers` the transport and cache policy; `DEPLOYMENT.md` is the
+      runbook for both hosts, including the order the cross-referencing hostnames become knowable. No CSP is
+      shipped, and the reason is recorded rather than left implied. (ADR-025)
+- [ ] Sign the console with a Content-Security-Policy. Deferred by ADR-025: the animation layer writes inline
+      styles and the PDF export uses a `blob:` URL, so a workable policy needs `style-src 'unsafe-inline'` and
+      the whole console exercised behind it — a wrong policy removes a feature quietly instead of failing.
+- [ ] Upload straight to object storage. A 100 MiB archive still passes through the API process and out to the
+      bucket inside one request, which is slow on a small instance and can meet a host's request ceiling. The fix
+      is a signed PUT from the browser, which is a new API surface and a new client path. (ADR-023 consequence)
 - [ ] Name a reviewer's refusal on the page, not only in the server log. `AI_MISCONFIGURED` currently reads
       the same whether the credential was rejected, the request shape was refused, or the review was blocked
       by a content filter; the distinguishing status and reason tag exist and are logged, so surfacing the

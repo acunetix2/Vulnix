@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     app_name: str = "Vulnix API"
     api_v1_prefix: str = "/api/v1"
     log_level: str = "INFO"
+    # Browser origins allowed to call this API. The console is served from its own
+    # host, so a deployed frontend is cross-origin by default and the browser
+    # blocks it unless the origin is listed here. Comma-separated, exact scheme and
+    # host, no trailing slash, no wildcards: requests carry a bearer token, so an
+    # echoing wildcard would let any site read any user's findings.
+    cors_allow_origins: str = ""
 
     # Database
     database_url: str = "sqlite:///./.data/vulnix.db"
@@ -44,6 +50,10 @@ class Settings(BaseSettings):
     s3_bucket: str = ""
     s3_access_key: str = ""
     s3_secret_key: str = ""
+    # A signing region is required even for a self-described endpoint, and an
+    # endpoint-less AWS client picks its own; "auto" is what R2 and the other
+    # S3-compatible stores expect. Set the real region for plain Amazon S3.
+    s3_region: str = "auto"
 
     # Upload limits
     upload_max_bytes: int = 100 * 1024 * 1024
@@ -227,6 +237,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """The allowlist as a list; empty means no cross-origin browser is served."""
+        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
 
     @property
     def integrations_ready(self) -> bool:

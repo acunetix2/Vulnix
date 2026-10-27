@@ -1,0 +1,13 @@
+# Installed by a deployed backend. Render reads this file; a local checkout still
+# installs from pyproject.toml (`pip install -e .[dev]`).
+#
+# pip resolves the "." below against the working directory, not this file's folder,
+# so the build runs from backend/ - which `rootDir: backend` in render.yaml arranges.
+#
+# One line on purpose: the version ranges live in pyproject.toml and a duplicated
+# list here is one that drifts silently from what the app actually imports. The two
+# extras are the pieces a deployment needs and a development machine usually has no
+# reason to download - the Postgres driver, and the client for S3-compatible object
+# storage. Non-editable, so the package is inside the environment and an import does
+# not depend on which directory the process was started from.
+.[postgres,s3]

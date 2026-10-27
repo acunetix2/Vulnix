@@ -5,6 +5,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import settings
@@ -127,6 +128,24 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     register_exception_handlers(app)
+
+    # Added before the request-context middleware so that middleware stays the
+    # outermost layer and every response - including a preflight, which carries no
+    # body - still gets the security headers. The allowlist is explicit because
+    # these requests carry a bearer token: echoing `*` would let any page read any
+    # user's findings. An unset list leaves the API same-origin only, which is what
+    # the dev proxy and a server-side client expect.
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+            expose_headers=["X-Request-ID"],
+            max_age=600,
+        )
+
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 
     @app.middleware("http")

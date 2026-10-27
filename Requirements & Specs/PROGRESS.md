@@ -46,6 +46,12 @@
       generated-and-rotatable webhook signing secret, and `POST /projects/{id}/uploads/github`, which
       streams a selected repository's archive into the same quarantined intake as an upload (ADR-010,
       which supersedes the ADR-007 alternative that rejected consent flows).
+- [x] Deployment shape: the console builds as a static SPA for Cloudflare Pages with its own history
+      fallback and header policy, and the backend deploys on Render as an API plus a Celery worker, a beat
+      sweeper and a private Redis, with quarantined archives in an S3-compatible bucket. `render.yaml`,
+      `backend/requirements.txt`, `frontend/public/_redirects`, `frontend/public/_headers` and the runbook in
+      `DEPLOYMENT.md` (ADR-022 to ADR-025). Authored and validated against the vendors' documented formats;
+      no real deploy has been executed yet.
 
 ## In progress
 - [ ] CI pipeline for lint and tests.
@@ -569,3 +575,41 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
 - Caution for the owner, recorded without the value: a pytest traceback echoed the request headers, so the
   live OpenRouter bearer token appeared in that console output and in this session's log. It is not in any
   tracked file, in `.env.example`, or in the commit described here.
+
+## Verification log (2026-10-27, deployable on Cloudflare Pages and Render)
+
+- Full backend suite: **375 passed, 1 warning in 633.32s**. The warning is the pre-existing Starlette
+  `testclient` deprecation notice. Twelve of the new tests are this change's (CORS, S3 storage, queue wiring).
+- `npx vite build` succeeded and `dist/` contains `_redirects` and `_headers` at the root, which is the
+  evidence that Pages will actually read them: both files are authored in `frontend/public/`, which Vite
+  copies into the output directory, and Cloudflare parses them from the output directory only.
+- Preflight behaviour was observed, not assumed: an `OPTIONS /health` with a listed `Origin` answers 200 and
+  carries `access-control-allow-origin`, the six allowed methods and, because `CORSMiddleware` sits inside the
+  request-context middleware, also `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` and
+  `X-Request-ID`. An unset allowlist adds nothing to any response, so the dev proxy path is untouched. That
+  assertion is now in `tests/unit/test_cors.py`.
+- `render.yaml` was validated against Render's own published JSON Schema (`render.com/schema/render.yaml.json`):
+  every service key, `type`, `plan`, `region` and `runtime` value, all 36 group variables and every
+  `fromGroup` / `fromService` reference. Two things the schema corrected while writing it: the service type is
+  `worker`, not `backgroundWorker`, and a `keyvalue` service requires `ipAllowList`, which is set to `[]`
+  because nothing outside the private network should reach the queue.
+- `preDeployCommand` is present but commented out. Render only allows it on a paid instance type, and a
+  blueprint that fails validation blocks the whole environment, so the default shape is the one that creates;
+  DEPLOYMENT.md says when to uncomment it and what to run by hand until then.
+- boto3 is not installed in this venv, which is why the storage tests substitute the module rather than skip:
+  the assertions are about the client configuration a real R2 bucket demands, and a skip would have meant no
+  coverage of exactly the code that fails in production. `boto3>=1.34.117` is now the `s3` extra's floor, the
+  release that accepts `request_checksum_calculation`.
+- Two claims in the first draft of DEPLOYMENT.md were wrong and were corrected against the code: there is no
+  signed download URL anywhere (an archive is read server-side by `app/scanning/pipeline.py` and by the
+  reviewer path; the console sees only upload metadata), and the pooled-versus-direct Supabase advice had no
+  basis in this codebase, so it now says only what is true - the API opens a connection per thread and the
+  worker one per process.
+- Not verified, stated plainly: no Pages project and no Render environment has been created, so the build
+  settings, the prompted secret names, the queue wiring and the SPA fallback are unproven against the real
+  hosts. Lint debt exists and is not this change's: `npx eslint .` reports 39 errors and 2 warnings across 14
+  files, the largest being `src/pages/Landing.jsx` (16) and `src/components/app/ThreatIntelCard.jsx` (6), and
+  none of those files is touched here - this change edits no `src/` file at all. `ruff check app tests` reports
+  9, in `app/agent/*`, two long lines in `app/modules/auth/routes.py`, an unsorted import block in
+  `app/modules/scans/routes.py`, and the deliberate `import app.agent` side-effect at `app/main.py:110`. All of
+  them were already present at `854f87e`; every file this change does touch is clean under both linters.
