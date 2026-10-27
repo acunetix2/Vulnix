@@ -49,15 +49,24 @@ Use `[ ]` for pending, `[/]` for in progress, and `[x]` only after verification.
 - [x] Add AI explanation endpoint with quota/rate limit.
 - [x] Add tests for malformed AI output, uncertainty, and no unsupported claims.
 - [x] Clearly label AI-generated explanation.
-- [x] Make hosted AI (Groq) a working provider, not fallback-only. (single credential; provider union
-      widened; `/ready` reports credential presence only)
+- [x] Make hosted AI (Groq) a working provider, not fallback-only. (provider union widened; `/ready`
+      reports credential presence only. Revised by ADR-015: each hosted reviewer has its own credential)
 - [x] Let a workspace switch reviewer models. (catalog built by probing each provider's own model list;
       clients may send only a catalog entry id, re-validated on every write and every call; see ADR-008)
-- [x] Record which model actually answered. (`provider`/`model` vs the requested `model_id`; a local
-      primary can fall through to a hosted model and the API, stored record and UI all say so)
+- [x] Record which model actually answered. (`provider`/`model` vs the requested `model_id`; a primary that
+      does not answer hands over and the API, stored record and UI all say so)
+- [x] Chain the hosted reviewers so an audit survives an outage. (Google AI Studio and OpenRouter added
+      behind the same OpenAI-compatible adapter as Groq, each with its own credential, address, timeout and
+      context window; any configured reviewer can be primary and any can take over; a failed link is parked
+      for a cooldown instead of re-paid on every retry; a handover resolves only a model the account has.
+      See ADR-015)
+- [x] Bound the request before it can be billed. (`max_tokens` on every hosted reply with a truncation
+      error rather than a re-ask; prompt measured against the reviewer's window and refused as
+      `AI_CONTEXT_OVERFLOW` before the socket opens; only a call that answered is charged)
 - [x] Persist AI usage as a per-day credit ledger. (`ai_usage_events`: counters and identifiers only, never
-      prompts or output; one succeeded call = one credit; failed calls consume quota without earning credit)
-- [ ] Build the credits consumption heatmap on `GET /workspaces/{id}/ai/usage`. (response rows are sparse
+      prompts or output; one succeeded call = one credit; a failure, a timeout or a retry that eventually
+      worked spends no credit at all)
+- [x] Build the credits consumption heatmap on `GET /workspaces/{id}/ai/usage`. (response rows are sparse
       and oldest-first, so the client zero-fills the gap days)
 
 ## Phase 5 — Hardening and release
@@ -107,6 +116,64 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
 - [ ] Complete the external GitHub App setup: register the integration and Supabase callbacks, grant
       Account Email addresses read-only, and allow the console `/auth/callback` in Supabase. Backend
       callback generation and the shared client id are verified; provider settings require the operator.
+
+## Requested 2026-10-27 — every audit is an AI audit
+- [x] Stop CLI analysers running as default scan stages. `ScanOptions` and `build_adapters()` now treat
+      `static_analysis`, `secrets` and `dependencies` as opt-in, the New Audit form starts with AI review
+      only, and the audit detail says when no CLI tool was asked for. Adapters remain available on request.
+      (ADR-014, revises ADR-001)
+- [x] Report `NO_ANALYSIS_REQUESTED` when the agent is off and no category was requested, instead of
+      blaming absent tools with `ALL_SCANNERS_FAILED`.
+- [x] Make `NO_SOURCE` truthful and act on its cause: the skipped step now states the intake candidate
+      count, and reviewable source covers markdown, HTML and templates, JSON/XML/properties, PowerShell,
+      notebooks, more languages and credential dotfiles, because the agent is the default secret reviewer.
+- [x] Restore backend startup: pin `sqlalchemy>=2.0.36,<2.1` so the 2.1 compiled extension that Windows
+      Application Control blocks cannot be selected again, and return `/health` to liveness only.
+- [ ] Re-run one audit against a real repository and confirm the execution stream contains agent steps and
+      no CLI rows. Requires the operator's session and permission to spend AI credits.
+
+## Requested 2026-10-27 — the failure modes a live audit exposed
+- [x] Survive a dead database connection during a scan. A crash now records the audit as `failed` with
+      `INTERNAL_ERROR` and a completion time instead of leaving a `running` zombie and raising out of the
+      worker; the write is retried once on a fresh session and then given up. The step trace reassigns
+      `scan.summary` rather than mutating it, and survives one lost commit. (ADR-016)
+- [x] Stop a handover sending a model name the provider never confirmed. A reviewer whose own listing
+      reports nothing usable is skipped with no request and no cooldown, instead of spending its one
+      takeover attempt on an invented name and then being benched for it. (ADR-016, revises ADR-015)
+- [x] Stop the failover chain grinding a cooled-down reviewer. A context-overflow refusal no longer parks
+      the narrow reviewer — the width belongs to the file, not to the link's health — and the audit's retry
+      sleep is at least as long as the earliest cooldown among the reviewers it was actually handed work by.
+      (ADR-016)
+- [x] Name why a hosted reviewer refused a request. The reviewer's own machine-readable reason code decides
+      between `AI_CONTEXT_OVERFLOW` (413) and `AI_MISCONFIGURED` (502); its message body is read for that
+      code only, logged as a status, and never reaches a client. (ADR-016)
+- [x] Stop offering local inference by default. `VULNIX_AI_LOCAL_ENABLED=false` and a hosted boot default
+      remove the local reviewer from the picker and from severity routing while the adapter, its settings,
+      its alias and its tests all stay; one setting brings the whole path back. Landing copy that advertised
+      "Ollama (default) — fully local, zero egress" now states the failover behaviour the code supports.
+      (ADR-017, revises ADR-008)
+- [x] Rotate or revoke the OpenRouter credential that was committed in `backend/.env.example`. The owner
+      rotated it on 2026-10-27 and put the replacement in `backend/.env`, which git ignores; the tracked
+      example line stays empty. The value remains in git history at `013f96d` and is dead there. (ADR-018)
+- [x] Stop the unit suite inheriting reviewer credentials. Catalog tests blank all four hosted
+      credentials before probing, so a key in `backend/.env` cannot make a reviewer appear that a test
+      asserts is absent — the hazard that turned thirteen tests red the moment one key was configured.
+      Adding a reviewer now means adding its credential to that fixture. (ADR-021)
+
+- [x] Make the audit detail console follow the selected theme. `.audit-ops` in `frontend/src/index.css`
+      declared the console token set dark-only and unconditionally, so that page ignored the theme control
+      while every other `/app` page obeyed it. The palette is now light-as-base with `.dark .audit-ops`
+      replacing it, and the glow, grid overlay, shadow and terminal scrollbar are variables instead of
+      literals. The runs and findings lists were already token-driven and are unchanged. (ADR-019)
+- [x] Stop the execution stream inventing runtimes. A finished audit measured its duration from the moment
+      the page mounted, so a run that failed in about a minute reported `runtime 36m 39s` and the number grew
+      with the calendar. It now times to `completed_at` and keeps the ticking clock for live runs only.
+      (ADR-020)
+- [ ] Name a reviewer's refusal on the page, not only in the server log. `AI_MISCONFIGURED` currently reads
+      the same whether the credential was rejected, the request shape was refused, or the review was blocked
+      by a content filter; the distinguishing status and reason tag exist and are logged, so surfacing the
+      tag on the step would let an operator triage from the console. Needs a decision on how much of a
+      vendor's machine-readable code belongs in a client surface that is otherwise alias-only.
 
 ## Working agreement
 Do not start the next phase merely because the previous phase's code exists. Confirm tests, acceptance criteria, security review, and documentation updates first.

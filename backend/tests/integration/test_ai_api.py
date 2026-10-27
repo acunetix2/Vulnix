@@ -149,7 +149,7 @@ def test_no_vendor_model_identity_leaves_the_server(client, workspace, wire) -> 
         client.get(f"/api/v1/workspaces/{ws_id}/audit-events").text,
     ]
     for body in bodies:
-        for hidden in ("qwen", "gpt-oss", "ollama", "groq", ENTRY_HOSTED.id):
+        for hidden in ("qwen", "gpt-oss", "ollama", "groq", "gemini", "google", ENTRY_HOSTED.id):
             assert hidden not in body.lower()
 
 

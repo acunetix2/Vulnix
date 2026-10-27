@@ -34,6 +34,13 @@ function msToClock(ms) {
   return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`
 }
 
+function checkpointTime(value) {
+  if (!value) return '--:--:--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--:--:--'
+  return date.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
 /** Tool runs are the fallback for scans recorded before the worker traced steps. */
 function rowsFrom(steps, runs) {
   if (steps.length > 0) return steps
@@ -46,7 +53,14 @@ function rowsFrom(steps, runs) {
   }))
 }
 
-export function ScanProgressTrace({ steps = [], runs = [], startedAt, active }) {
+export function ScanProgressTrace({
+  steps = [],
+  runs = [],
+  startedAt,
+  endedAt,
+  active,
+  variant = 'default',
+}) {
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -59,8 +73,83 @@ export function ScanProgressTrace({ steps = [], runs = [], startedAt, active }) 
   const total = rows.length
   const done = rows.filter((row) => FINISHED.has(row.status)).length
   const current = rows.find((row) => row.status === 'running')
-  const elapsed = startedAt ? now - new Date(startedAt).getTime() : null
+  // A finished run is measured to its own last checkpoint, not to the moment the
+  // page happened to open: `now` stops ticking the instant the run stops being live,
+  // so a two-week-old audit would otherwise report the calendar as its runtime.
+  const endMs = active || !endedAt ? now : new Date(endedAt).getTime()
+  const elapsed = startedAt ? endMs - new Date(startedAt).getTime() : null
   const pct = total === 0 ? 0 : (done / total) * 100
+
+  if (variant === 'terminal') {
+    return (
+      <div className="font-mono">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/60 pb-3 text-[11px] text-muted-foreground">
+          <span className="tabular-nums">{done}/{total} checkpoints complete</span>
+          {current && <span className="min-w-0 flex-1 truncate text-primary">{current.label}</span>}
+          {elapsed !== null && (
+            <span className="ml-auto tabular-nums">
+              {active ? 'elapsed' : 'runtime'} {msToClock(elapsed)}
+            </span>
+          )}
+        </div>
+
+        {total === 0 ? (
+          <p className="py-8 text-center text-xs leading-6 text-muted-foreground">
+            {active
+              ? 'Awaiting the first worker checkpoint. The stream updates automatically.'
+              : 'No execution checkpoints were recorded for this run.'}
+          </p>
+        ) : (
+          <ol className="audit-terminal mt-2 max-h-[34rem] overflow-y-auto pr-1">
+            {rows.map((row, index) => (
+              <li
+                key={`${row.label}-${index}`}
+                className="flex items-start gap-2.5 border-b border-border/40 py-3 text-[11px] leading-5 last:border-b-0"
+              >
+                <time className="hidden w-[4.8rem] shrink-0 pt-0.5 tabular-nums text-muted-foreground/70 sm:block">
+                  {checkpointTime(row.at)}
+                </time>
+                <span className="mt-0.5 grid size-4 shrink-0 place-items-center">{markFor(row.status)}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="min-w-0 break-words text-foreground">{row.label}</span>
+                    <span
+                      className={cn(
+                        'text-[10px] uppercase tracking-wider',
+                        row.status === 'failed' || row.status === 'timed_out'
+                          ? 'text-destructive'
+                          : row.status === 'running'
+                            ? 'text-primary'
+                            : 'text-muted-foreground'
+                      )}
+                    >
+                      {row.status}
+                    </span>
+                  </div>
+                  {row.detail && (
+                    <p
+                      className={cn(
+                        'mt-1 break-words',
+                        row.status === 'failed' || row.status === 'timed_out'
+                          ? 'text-destructive'
+                          : 'text-muted-foreground'
+                      )}
+                    >
+                      {row.detail}
+                    </p>
+                  )}
+                </div>
+                <span className="shrink-0 pt-0.5 text-right tabular-nums text-muted-foreground">
+                  {row.finding_count > 0 && <span className="mr-2 text-primary">{row.finding_count}F</span>}
+                  {Number.isFinite(row.duration_ms) && row.duration_ms > 0 ? msToClock(row.duration_ms) : ''}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div>

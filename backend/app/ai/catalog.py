@@ -9,9 +9,9 @@ What leaves the server is an alias and an opaque token, never a vendor model
 name. The real provider and tag stay in this process and in the usage table,
 where they are needed for routing and cost, and nowhere else.
 
-Availability is probed rather than asserted. Groq exposes a different set per
-account, and Ollama only knows what is pulled locally, so a static catalogue
-would offer models that then fail on the request path.
+Availability is probed rather than asserted. Groq and Google expose a different
+set per account, and Ollama only knows what is pulled locally, so a static
+catalogue would offer models that then fail on the request path.
 """
 
 import hashlib
@@ -52,6 +52,34 @@ GROQ_CANDIDATES: tuple[tuple[str, str], ...] = (
     ),
 )
 
+# Google AI Studio candidates, checked the same way against the account's own
+# model list. These are the long-context reviewers: an audit that has to hold a
+# whole subsystem in view can continue here. Notes describe behaviour only.
+GEMINI_CANDIDATES: tuple[tuple[str, str], ...] = (
+    (
+        "gemini-2.5-pro",
+        "Widest-context reviewer. Reads a whole subsystem in one pass.",
+    ),
+    (
+        "gemini-2.5-flash",
+        "Steady reviewer for long files. Faster to answer than the widest.",
+    ),
+)
+
+# OpenRouter candidates, checked the same way. These are the narrow-window
+# reviewers: 32k tokens takes a file or a function, not a subsystem, so an audit
+# hands a long one to a wider reviewer instead of asking for a rejection.
+OPENROUTER_CANDIDATES: tuple[tuple[str, str], ...] = (
+    (
+        "qwen/qwen2.5-coder-32b-instruct:free",
+        "Free-tier coder review for one file at a time. Quickest to answer.",
+    ),
+    (
+        "qwen/qwen2.5-coder-32b-instruct",
+        "Same coder pass without the free-tier wait. Still one file at a time.",
+    ),
+)
+
 # Fixed names for the reviewers a user can actually pick, so the same engine is
 # called the same thing in the picker, in scan records and in exports. The local
 # entry is the tag Vulnix ships instructions for; any other image on the host
@@ -60,6 +88,10 @@ _KNOWN_ALIASES = {
     "groq:qwen/qwen3.8-27b": "Vulnix Pro",
     "groq:openai/gpt-oss-120b": "Vulnix Ultra",
     "groq:openai/gpt-oss-20b": "Vulnix Fast",
+    "gemini:gemini-2.5-pro": "Vulnix Wide",
+    "gemini:gemini-2.5-flash": "Vulnix Steady",
+    "openrouter:qwen/qwen2.5-coder-32b-instruct:free": "Vulnix Sprint",
+    "openrouter:qwen/qwen2.5-coder-32b-instruct": "Vulnix Focus",
     "ollama:qwen3.5:4b": "Vulnix Edge",
 }
 _LOCAL_ALIAS = "Vulnix Edge"
@@ -138,6 +170,15 @@ def _entry(provider: str, model: str, note: str, source: str) -> ModelEntry | No
 
 
 def _probe_ollama() -> list[ModelEntry]:
+    """What the host offers locally, when this deployment runs its own model.
+
+    Off by default (ADR-017): the product's reviewers are hosted, so the listing
+    is not asked for at all rather than asked and then filtered. Turning
+    `ai_local_enabled` on brings the whole local path back - adapter, aliases,
+    context settings and all.
+    """
+    if not settings.ai_local_enabled:
+        return []
     if settings.ai_provider == "none" or not settings.ai_base_url:
         return []
     try:
@@ -178,7 +219,7 @@ def _probe_groq() -> list[ModelEntry]:
         resp.raise_for_status()
         reachable = {
             str(item.get("id"))
-            for item in (resp.json().get("data") or [])
+            for item in _listing(resp.json())
             if isinstance(item, dict) and item.get("id")
         }
     except (httpx.HTTPError, ValueError, OSError):
@@ -196,6 +237,86 @@ def _probe_groq() -> list[ModelEntry]:
     return entries
 
 
+def _probe_gemini() -> list[ModelEntry]:
+    if not settings.gemini_ready:
+        return []
+    try:
+        resp = httpx.get(
+            f"{settings.gemini_base_url.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {settings.gemini_api_key}"},
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        reachable = {
+            str(item.get("id") or "").split("/", 1)[-1]
+            for item in _listing(resp.json())
+            if isinstance(item, dict) and item.get("id")
+        }
+    except (httpx.HTTPError, ValueError, OSError):
+        logger.warning("ai_probe_failed provider=gemini")
+        return []
+
+    entries: list[ModelEntry] = []
+    for model, note in GEMINI_CANDIDATES:
+        if model not in reachable:
+            continue
+        entry = _entry("gemini", model, note, "hosted")
+        if entry:
+            entries.append(entry)
+    return entries
+
+
+def _probe_openrouter() -> list[ModelEntry]:
+    if not settings.openrouter_ready:
+        return []
+    try:
+        resp = httpx.get(
+            f"{settings.openrouter_base_url.rstrip('/')}/models",
+            headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        # OpenRouter lists the free tier as its own model id, suffix included, so
+        # the account is matched on the exact name and only that name is asked of
+        # it. Stripping ":free" would offer a paid model to a key that cannot use
+        # it, and the request would be refused at a cost of one failed handover.
+        reachable = {
+            str(item.get("id"))
+            for item in _listing(resp.json())
+            if isinstance(item, dict) and item.get("id")
+        }
+    except (httpx.HTTPError, ValueError, OSError):
+        logger.warning("ai_probe_failed provider=openrouter")
+        return []
+
+    entries: list[ModelEntry] = []
+    for model, note in OPENROUTER_CANDIDATES:
+        if model not in reachable:
+            continue
+        entry = _entry("openrouter", model, note, "hosted")
+        if entry:
+            entries.append(entry)
+    return entries
+
+
+def _listing(body: object) -> list:
+    """The model array from either response shape, dropping anything unreadable."""
+    if not isinstance(body, dict):
+        return []
+    reported = body.get("data")
+    if reported is None:
+        # A native-style listing wraps entries under "models" and prefixes each
+        # name with "models/", so accept both shapes and strip the prefix.
+        reported = body.get("models") or []
+        return [
+            {"id": str(item.get("id") or item.get("name") or "").split("/", 1)[-1]}
+            if isinstance(item, dict)
+            else item
+            for item in reported
+        ]
+    return reported if isinstance(reported, list) else []
+
+
 _cache: tuple[float, list[ModelEntry]] | None = None
 _lock = threading.Lock()
 
@@ -209,9 +330,28 @@ def list_models(refresh: bool = False) -> list[ModelEntry]:
     with _lock:
         if not refresh and _cache and now - _cache[0] < PROBE_TTL_SECONDS:
             return list(_cache[1])
-        entries = _probe_ollama() + _probe_groq()
+        # A local model comes first when the deployment opts into one, then the
+        # hosted reviewers in configuration order: a deployment must never default
+        # onto the newest provider by accident.
+        entries = _probe_ollama() + _probe_groq() + _probe_gemini() + _probe_openrouter()
         _cache = (now, entries)
         return list(entries)
+
+
+def handover_model(provider: str, configured_default: str) -> str | None:
+    """The model to ask of a reviewer that is taking over a failed audit turn.
+
+    Only a name this account has reported comes back. The operator's configured
+    name is used when the probe confirmed it, and the first confirmed name when it
+    did not. When the provider reports nothing at all the answer is None rather
+    than a guess, because a handover that names a model the reviewer has never
+    offered spends its one attempt on a request that is refused - and the link is
+    then parked as though it had an outage. A skipped link costs nothing.
+    """
+    names = [entry.model for entry in list_models() if entry.provider == provider]
+    if configured_default and configured_default in names:
+        return configured_default
+    return names[0] if names else None
 
 
 def resolve(entry_id: str | None) -> ModelEntry | None:
@@ -246,35 +386,3 @@ def clear_cache() -> None:
     global _cache
     with _lock:
         _cache = None
-
-
-# Severity -> preferred alias.  Entries further right are fall-backs used when
-# the preferred model is unavailable for this account / this host.
-_SEVERITY_ALIAS_ORDER: dict[str, list[str]] = {
-    "critical": ["Vulnix Ultra", "Vulnix Pro", "Vulnix Fast", "Vulnix Edge"],
-    "high":     ["Vulnix Ultra", "Vulnix Pro", "Vulnix Fast", "Vulnix Edge"],
-    "medium":   ["Vulnix Pro",   "Vulnix Fast", "Vulnix Ultra", "Vulnix Edge"],
-    "low":      ["Vulnix Fast",  "Vulnix Edge", "Vulnix Pro"],
-    "info":     ["Vulnix Edge",  "Vulnix Fast"],
-}
-
-
-def preferred_for_severity(
-    severity: str,
-    entries: list[ModelEntry] | None = None,
-) -> ModelEntry | None:
-    """Return the best available model for *severity*, with graceful fallback.
-
-    Tries aliases in priority order for that severity tier; returns the first
-    one that is currently reachable.  Falls back to :func:`preferred` when no
-    alias matches (e.g. the account only has the local model pulled).
-    """
-    items = entries if entries is not None else list_models()
-    if not items:
-        return None
-    alias_by_name = {e.alias: e for e in items}
-    for alias in _SEVERITY_ALIAS_ORDER.get(severity.lower(), []):
-        entry = alias_by_name.get(alias)
-        if entry is not None:
-            return entry
-    return preferred(items)

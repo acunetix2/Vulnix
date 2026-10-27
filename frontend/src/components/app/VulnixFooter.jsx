@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { VulnixLogo } from '../VulnixLogo'
+import { VulnixLegalGraphicBanner } from '../../pages/landing/legal/VulnixLegalGraphicBanner'
 import { cn } from '../../lib/utils'
 
 const FOOTER_LINKS = [
@@ -13,7 +14,7 @@ const FOOTER_LINKS = [
   { label: 'Contact', to: '/resources/support' },
 ]
 
-export function VulnixFooter({ dark = false, className }) {
+export function VulnixFooter({ dark = false, banner = false, className }) {
   const year = new Date().getFullYear()
 
   return (
@@ -24,6 +25,8 @@ export function VulnixFooter({ dark = false, className }) {
         className
       )}
     >
+      {banner && <VulnixLegalGraphicBanner />}
+
       <div className="mx-auto flex w-full max-w-[1120px] flex-col items-center justify-between gap-4 sm:flex-row">
         <div className="flex items-center gap-3 text-xs">
           <Link

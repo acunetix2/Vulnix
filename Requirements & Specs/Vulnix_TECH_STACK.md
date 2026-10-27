@@ -21,8 +21,9 @@
 | Background jobs | Celery + Redis | Queue scans and AI analysis asynchronously |
 | Security scanners | Semgrep CE, Gitleaks, Bandit | Static analysis and secret detection |
 | Dependency/container scanning | OWASP Dependency-Check and/or Trivy | Identify known vulnerable dependencies and supported artifacts |
-| AI integration | Provider-independent AI service | Explanations, risk context, remediation suggestions, and AI-assisted review |(The agents/models...All this running locally in Ollama)
-| Local model runtime | Ollama (development option) | Run supported models locally |
+| AI integration | Provider-independent AI service | Explanations, risk context, remediation suggestions, and AI-assisted review |
+| Model reviewers | Hosted reviewers, configured per deployment | Fail over to the next reviewer when one is down, throttled or too narrow |
+| Local model runtime | Ollama (opt-in, off by default) | Run a supported model on the host when a deployment wants its own reviewer |
 | Object storage | S3-compatible storage | Store uploaded archives and generated reports |
 | Containerization | Docker | Reproducible services and isolated workers |
 | Backend testing | Pytest | Unit, integration, and API tests |
@@ -155,8 +156,8 @@ The AI layer is a core product subsystem, not a replacement for deterministic se
 
 Build a provider-independent AI adapter so the model provider can change without rewriting business logic.
 
-- **Local development option:** Ollama with a suitable code-capable model.
-- **Hosted option:** a model API selected according to quality, privacy terms, latency, and budget.
+- **Hosted reviewers (default):** model APIs selected according to quality, privacy terms, latency, and budget. A deployment configures which ones it uses; the console only ever sees a Vulnix alias.
+- **Local reviewer (opt-in):** Ollama with a suitable code-capable model, enabled with `VULNIX_AI_LOCAL_ENABLED=true` for a deployment that runs its own inference. It is not offered by default, because a picker that lists a model the host has not pulled invites a choice that then cannot answer.
 - **Hybrid option:** run scanners locally and send only minimal, redacted context to a hosted model when enabled.
 
 Ollama is a model runtime, not a model itself. Model capabilities, license terms, hardware needs, and output quality vary.
@@ -251,7 +252,8 @@ OBJECT_STORAGE_ENDPOINT=
 OBJECT_STORAGE_BUCKET=
 OBJECT_STORAGE_ACCESS_KEY=
 OBJECT_STORAGE_SECRET_KEY=
-AI_PROVIDER=ollama
+AI_PROVIDER=groq
+AI_LOCAL_ENABLED=false
 AI_BASE_URL=http://localhost:11434
 AI_MODEL=replace_with_selected_model
 AI_API_KEY=

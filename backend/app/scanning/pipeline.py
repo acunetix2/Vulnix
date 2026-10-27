@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.agent.review import AGENT_TOOL_NAME, AgentOutcome, run_agent_review
@@ -121,11 +122,38 @@ def execute_scan(scan_id: str) -> None:
             shutil.rmtree(workdir, ignore_errors=True)
     except Exception:
         logger.exception("scan_crashed scan_id=%s", scan_id)
-        scan = db.get(Scan, scan_id)
-        if scan is not None and scan.status in _ACTIVE:
-            _finish(db, scan, "failed", "INTERNAL_ERROR")
+        _recover_crash(db, scan_id)
     finally:
         db.close()
+
+
+def _mark_failed(db: Session, scan_id: str) -> None:
+    scan = db.get(Scan, scan_id)
+    if scan is not None and scan.status in _ACTIVE:
+        _finish(db, scan, "failed", "INTERNAL_ERROR")
+
+
+def _recover_crash(db: Session, scan_id: str) -> None:
+    """Record a crash without letting the recording of it fail as well.
+
+    A crash is often the database connection dying, and a session that failed
+    mid-flush cannot write anything until it is rolled back. Retrying on a fresh
+    session is what stops a scan sitting as "running" forever; swallowing the
+    second failure is what stops POST /scans - which already committed the row -
+    from answering 500 for a job that has already stopped.
+    """
+    try:
+        db.rollback()
+        _mark_failed(db, scan_id)
+        return
+    except SQLAlchemyError:
+        logger.warning("scan_crash_recovery_retry scan_id=%s", scan_id)
+
+    try:
+        with SessionLocal() as fresh:
+            _mark_failed(fresh, scan_id)
+    except SQLAlchemyError:
+        logger.exception("scan_crash_recovery_failed scan_id=%s", scan_id)
 
 
 class Trace:
@@ -148,9 +176,34 @@ class Trace:
                 break
         else:
             self.steps.append(entry)
-        # Reassign, not mutate: SQLAlchemy cannot see inside a JSON column.
-        self.scan.summary = {**(self.scan.summary or {}), "steps": self.steps[-_MAX_STEPS:]}
-        self.db.commit()
+        self._publish()
+
+    def _publish(self) -> None:
+        """Write the trace, tolerating a connection that died during a model call.
+
+        A hosted reviewer can hold a request open for 45 seconds, and the database
+        can close this scan's connection while it waits. Losing one step line is
+        not a reason to discard a run that has already reviewed files, so a failed
+        write is rolled back - which drops the dead transaction and its broken
+        connection - and the same step is written once more on a live one. A second
+        failure is logged and left alone: the trace is progress, not the result.
+        """
+        for attempt in (0, 1):
+            try:
+                # Reassign, not mutate: SQLAlchemy cannot see inside a JSON column.
+                self.scan.summary = {
+                    **(self.scan.summary or {}),
+                    "steps": self.steps[-_MAX_STEPS:],
+                }
+                self.db.commit()
+                return
+            except SQLAlchemyError:
+                self.db.rollback()
+                logger.warning(
+                    "trace_commit_%s scan_id=%s",
+                    "dropped" if attempt else "retried",
+                    self.scan.id,
+                )
 
 
 def _decide(
@@ -172,6 +225,10 @@ def _decide(
 
     # CLI checks may be run by themselves when the caller explicitly disables
     # agent review. Missing optional tools are notes; real failures remain visible.
+    if not results:
+        # Nothing at all was asked for: the agent was turned off and no optional
+        # CLI category was enabled. Saying so beats blaming absent scanners.
+        return ("failed", "NO_ANALYSIS_REQUESTED")
     if tools_worked:
         return ("completed_with_errors" if problems else "completed", None)
     return ("failed", "ALL_SCANNERS_FAILED")

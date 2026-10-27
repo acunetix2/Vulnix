@@ -2,16 +2,19 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, useSearchParams, Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
+  Activity,
+  BrainCircuit,
+  ChevronRight,
   StopCircle,
   ScanSearch,
   ShieldCheck,
-  Clock,
-  FileDown,
   Share2,
   Wrench,
   CircleDashed,
   Globe,
   Network,
+  Search,
+  Terminal,
 } from 'lucide-react'
 import { ThreatIntelCard } from '../components/app/ThreatIntelCard'
 import { Button } from '../components/ui/button'
@@ -62,6 +65,7 @@ const TOOL_TONES = {
 
 const AGENT_TONES = {
   succeeded: 'success',
+  running: 'info',
   partial: 'warning',
   failed: 'danger',
   skipped: 'neutral',
@@ -72,7 +76,7 @@ const AGENT_TONES = {
    audit, so the wording below can promise that without hedging. */
 const STATUS_EXPLANATIONS = {
   completed:
-    'The AI agent read this archive and its findings are counted below. Any CLI tool installed on this server added its own.',
+    'The AI agent read this archive and its findings are counted below. Optional CLI tools requested for this audit added their own.',
   completed_with_errors:
     'The review produced usable findings, but a CLI tool crashed or timed out. The agent’s findings stand on their own — check the tool list below for what is missing.',
   failed:
@@ -81,6 +85,21 @@ const STATUS_EXPLANATIONS = {
     'The audit was stopped before it finished. Findings already stored remain, but the counts below were not rolled up.',
   running: 'The AI agent is reading the archive file by file; optional CLI tools run after it.',
   queued: 'The audit is waiting for capacity and has not started yet.',
+}
+
+// The codes the worker can end a run with, in the terms an engineer acts on.
+const ERROR_HINTS = {
+  NO_SOURCE: 'The archive held no file the agent could read as source — check what was uploaded.',
+  AI_DISABLED: 'No reviewer is enabled on this server, so the audit had no scanner to run.',
+  AGENT_DISABLED: 'The agent is switched off for this deployment, and nothing else was requested.',
+  NO_ANALYSIS_REQUESTED: 'AI review was turned off and no optional CLI tool was requested.',
+  ALL_SCANNERS_FAILED: 'None of the CLI tools requested for this audit could run here.',
+  UPLOAD_UNAVAILABLE: 'The archive behind this audit is gone or was rejected before review.',
+  TIMEOUT: 'The audit ran out of wall-clock time before the agent finished.',
+  AI_UNAVAILABLE: 'Every reviewer this deployment is configured to use refused the call. The audit is retryable once one answers.',
+  AI_MISCONFIGURED: 'The reviewer was asked but has no usable endpoint or credential here.',
+  AI_CONTEXT_OVERFLOW: 'A file was wider than every reviewer in the chain can read at once. Selecting the widest reviewer may take it.',
+  AI_OUTPUT_TRUNCATED: "A reviewer's answer hit the output limit, so it was reported rather than re-asked.",
 }
 
 function humanize(value) {
@@ -116,9 +135,104 @@ function runSubtitle(scan) {
 }
 
 const RUN_TABS = [
-  { key: 'overview', label: 'Overview' },
+  { key: 'overview', label: 'Run timeline' },
   { key: 'findings', label: 'Findings' },
 ]
+
+const SPECIALIST_NAMES = {
+  code: 'Code Agent',
+  intel: 'Threat Intel Agent',
+  dep: 'Dependency Agent',
+}
+
+const SPECIALIST_ROLES = {
+  code: 'Code analysis and patch generation',
+  intel: 'Threat intelligence and exploit context',
+  dep: 'Dependency and exposure analysis',
+}
+
+function Metric({ label, value, detail, accent = false, danger = false }) {
+  return (
+    <div className="min-w-0 px-4 py-3">
+      <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
+      <p
+        className={cn(
+          'mt-1.5 truncate text-xl font-semibold tabular-nums',
+          danger ? 'text-destructive' : accent ? 'text-primary' : 'text-foreground'
+        )}
+      >
+        {value}
+      </p>
+      <p className="mt-1 truncate text-[11px] text-muted-foreground">{detail}</p>
+    </div>
+  )
+}
+
+function AgentNode({ name, role, status, calls, errors = 0, primary = false, children }) {
+  return (
+    <article
+      className={cn(
+        'relative overflow-hidden rounded-lg border bg-background/45 p-3.5',
+        primary ? 'border-primary/30' : 'border-border/80'
+      )}
+    >
+      {primary && <div className="absolute inset-y-0 left-0 w-0.5 bg-primary" aria-hidden />}
+      <div className="flex items-start gap-3">
+        <span
+          className={cn(
+            'mt-0.5 grid size-8 shrink-0 place-items-center rounded-md border',
+            primary ? 'border-primary/30 bg-primary/10 text-primary' : 'border-border bg-muted/50 text-muted-foreground'
+          )}
+        >
+          {primary ? <BrainCircuit className="size-4" /> : <Network className="size-4" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="truncate text-sm font-semibold text-foreground">{name}</p>
+            <Pill tone={AGENT_TONES[status] || TOOL_TONES[status] || 'neutral'}>
+              {humanize(status || 'not recorded')}
+            </Pill>
+          </div>
+          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{role}</p>
+        </div>
+      </div>
+      {(calls != null || errors > 0) && (
+        <div className="mt-3 flex items-center gap-4 border-t border-border/60 pt-2.5 text-[11px] tabular-nums text-muted-foreground">
+          {calls != null && <span>{calls} dispatch{calls === 1 ? '' : 'es'}</span>}
+          {errors > 0 && <span className="text-destructive">{errors} error{errors === 1 ? '' : 's'}</span>}
+        </div>
+      )}
+      {children}
+    </article>
+  )
+}
+
+function Telemetry({ icon: Icon, label, value }) {
+  return (
+    <div className="rounded-lg border border-border/70 bg-background/35 p-3">
+      <div className="flex items-center gap-2 text-muted-foreground">
+        <Icon className="size-3.5 text-primary" aria-hidden />
+        <span className="text-[10px] uppercase tracking-[0.14em]">{label}</span>
+      </div>
+      <p className="mt-2 text-lg font-semibold tabular-nums text-foreground">{value ?? '—'}</p>
+    </div>
+  )
+}
+
+function RunDuration({ scan, fallback }) {
+  const active = ACTIVE.has(scan.status)
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!active || !scan.started_at) return undefined
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [active, scan.started_at])
+
+  if (!scan.started_at) return formatDuration(fallback)
+  const end = scan.completed_at ? new Date(scan.completed_at).getTime() : now
+  return formatDuration(end - new Date(scan.started_at).getTime())
+}
 
 function RunTabs({ value, onChange, className }) {
   return (
@@ -294,15 +408,7 @@ export function AuditRunDetail() {
             className="gap-1.5"
           >
             <Share2 data-icon="inline-start" />
-            Share & Export
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => setShareModalOpen(true)}
-            className="gap-1.5"
-          >
-            <FileDown data-icon="inline-start" />
-            Export options
+            Share & export
           </Button>
           <Button variant="outline" onClick={() => changeTab('findings')}>
             <ScanSearch data-icon="inline-start" />
@@ -351,22 +457,97 @@ export function AuditRunDetail() {
 
   const counts = bySeverity(scan)
   const options = scan.options || {}
+  const specialists = Object.entries(router?.agent_calls || {})
+  const primaryStatus =
+    agent?.status || agentRun?.status || (options.agent_review === false ? 'off' : isActive ? 'running' : 'not_recorded')
+  const primaryNodes = options.agent_review === false || (!agent && !agentRun) ? 0 : 1
+  const nodeCount = primaryNodes + specialists.length
+  const criticalAndHigh = (counts.critical || 0) + (counts.high || 0)
+  const cliRequested = Boolean(options.static_analysis || options.secrets || options.dependencies)
 
   return (
-    <PageStack>
-      <PageHeader
-        title={project?.name || 'Audit'}
-        description={runSubtitle(scan)}
-        breadcrumb={breadcrumb}
-        actions={actions}
-        meta={
-          <div className="flex flex-wrap items-center gap-3">
-            <ScanStatusBadge status={scan.status} />
+    <PageStack className="audit-ops p-3 sm:p-4">
+      <header className="audit-command overflow-hidden rounded-xl border border-border/80 bg-background/50">
+        <div className="flex flex-col gap-5 p-4 sm:p-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <nav aria-label="Breadcrumb">
+              <ol className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+                {breadcrumb.map((crumb, index) => (
+                  <li key={`${crumb.label}-${index}`} className="flex items-center gap-1">
+                    {index > 0 && <ChevronRight className="size-3 text-border-strong" aria-hidden />}
+                    {crumb.to && index < breadcrumb.length - 1 ? (
+                      <Link to={crumb.to} className="transition-colors hover:text-primary">
+                        {crumb.label}
+                      </Link>
+                    ) : (
+                      <span className={cn(index === breadcrumb.length - 1 && 'text-foreground')}>{crumb.label}</span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </nav>
+            <div className="mt-5 flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.2em] text-primary">
+              <Activity className="size-3.5" aria-hidden />
+              Autonomous security audit
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <h1 className="truncate text-2xl font-semibold tracking-[-0.04em] text-foreground">
+                {project?.name || 'Repository audit'}
+              </h1>
+              <ScanStatusBadge status={scan.status} />
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">{runSubtitle(scan)}</p>
           </div>
-        }
-      />
+          <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>
+        </div>
 
-      <RunTabs value={tab} onChange={changeTab} />
+        <div className="grid grid-cols-2 border-y border-border/70 bg-background/35 lg:grid-cols-4 lg:divide-x lg:divide-border/70">
+          <Metric
+            label="Run state"
+            value={
+              isActive
+                ? 'LIVE'
+                : scan.status === 'completed'
+                  ? 'COMPLETE'
+                  : scan.status === 'completed_with_errors'
+                    ? 'ATTENTION'
+                    : humanize(scan.status).toUpperCase()
+            }
+            detail={isActive ? 'Polling worker checkpoints' : humanize(primaryStatus)}
+            accent={isActive || scan.status === 'completed'}
+            danger={scan.status === 'failed'}
+          />
+          <Metric
+            label="Files inspected"
+            value={agent?.files_reviewed ?? '—'}
+            detail={agent ? `${agent.files_skipped ?? 0} skipped during intake` : 'Waiting for reviewer telemetry'}
+          />
+          <Metric
+            label="Findings"
+            value={scan.summary?.total_findings ?? 0}
+            detail={`${criticalAndHigh} critical or high`}
+            danger={criticalAndHigh > 0}
+          />
+          <Metric
+            label="Elapsed"
+            value={<RunDuration scan={scan} fallback={agentRun?.duration_ms} />}
+            detail={scan.completed_at ? `Finished ${formatDate(scan.completed_at)}` : 'Audit clock'}
+          />
+        </div>
+
+        <div className="flex items-start gap-2.5 px-4 py-3 text-[11px] leading-5 text-muted-foreground sm:px-5">
+          <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full bg-primary', isActive && 'animate-pulse')} aria-hidden />
+          <p className="min-w-0">
+            {STATUS_EXPLANATIONS[scan.status] || 'Audit in progress.'}
+            {scan.error_code && ERROR_HINTS[scan.error_code] && (
+              <span className="text-foreground/80"> {ERROR_HINTS[scan.error_code]}</span>
+            )}
+          </p>
+          {scan.error_code && <InlineCode className="ml-auto shrink-0">{scan.error_code}</InlineCode>}
+        </div>
+      </header>
+
+      <RunTabs value={tab} onChange={changeTab} className="rounded-lg border bg-background/35 px-2" />
 
       {tab === 'findings' ? (
         <>
@@ -513,212 +694,153 @@ export function AuditRunDetail() {
         </>
       ) : (
         <>
-          <Panel
-            title="What this status means"
-            description={STATUS_EXPLANATIONS[scan.status] || 'Audit in progress.'}
-          >
-            {scan.error_code ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                Error code
-                <InlineCode>{scan.error_code}</InlineCode>
-              </div>
-            ) : (
-              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
-                <span className="inline-flex items-center gap-1.5">
-                  <Clock className="size-4" aria-hidden />
-                  Started {scan.started_at ? formatDate(scan.started_at) : 'not yet'}
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <ShieldCheck className="size-4" aria-hidden />
-                  {scan.completed_at
-                    ? `Finished ${formatDate(scan.completed_at)}`
-                    : isActive
-                      ? 'Running now'
-                      : 'No completion time'}
-                </span>
-                {scan.started_at && scan.completed_at && (
-                  <span>
-                    Duration{' '}
-                    {formatDuration(
-                      new Date(scan.completed_at) - new Date(scan.started_at)
-                    )}
+          <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <div className="space-y-4">
+              <Panel
+                title="Autonomous agent network"
+                description="The reviewer and only the specialists actually dispatched in this run"
+                actions={
+                  <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                    {nodeCount} node{nodeCount === 1 ? '' : 's'}
                   </span>
-                )}
-              </div>
-            )}
-            {isActive && (
-              <p className="mt-3 text-xs text-muted-foreground">
-                This page refreshes automatically while the audit runs.
-              </p>
-            )}
-          </Panel>
-
-          <Panel
-            title="AI review"
-            description="The agent that read this archive, and what it reported"
-          >
-            {agent ? (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Pill tone={AGENT_TONES[agent.status] || 'neutral'}>{humanize(agent.status)}</Pill>
-                  {agent.reviewer && <span className="text-sm text-muted-foreground">{agent.reviewer}</span>}
-                  {agent.error_code && <InlineCode>{agent.error_code}</InlineCode>}
-                </div>
-                <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
-                  <span className="tabular-nums">
-                    <span className="text-foreground">{agent.files_reviewed ?? 0}</span> file
-                    {agent.files_reviewed === 1 ? '' : 's'} read
-                  </span>
-                  <span className="tabular-nums">
-                    <span className="text-foreground">{agent.files_skipped ?? 0}</span> skipped as
-                    binary, empty or over the size budget
-                  </span>
-                  <span className="tabular-nums">
-                    <span className="text-foreground">{agent.calls ?? 0}</span> reviewer call
-                    {agent.calls === 1 ? '' : 's'}
-                  </span>
-                  {agent.investigations > 0 && (
-                    <span className="tabular-nums">
-                      <span className="text-foreground">{agent.investigations}</span> investigation
-                      {agent.investigations === 1 ? '' : 's'} across files
-                    </span>
-                  )}
-                  {agent.follow_ups > 0 && (
-                    <span className="tabular-nums">
-                      <span className="text-foreground">{agent.follow_ups}</span> follow-up call
-                      {agent.follow_ups === 1 ? '' : 's'}
-                    </span>
-                  )}
-                  {agent.context_reads > 0 && (
-                    <span className="tabular-nums">
-                      <span className="text-foreground">{agent.context_reads}</span> targeted code read
-                      {agent.context_reads === 1 ? '' : 's'}
-                    </span>
-                  )}
-                  {agent.searches > 0 && (
-                    <span className="tabular-nums">
-                      <span className="text-foreground">{agent.searches}</span> literal search
-                      {agent.searches === 1 ? '' : 'es'}
-                    </span>
-                  )}
-                  {agent.investigation_failures > 0 && (
-                    <span className="tabular-nums">
-                      <span className="text-foreground">{agent.investigation_failures}</span> failed
-                      follow-up{agent.investigation_failures === 1 ? '' : 's'}; the last supported
-                      review was kept
-                    </span>
-                  )}
-                  <span className="tabular-nums">
-                    <span className="text-foreground">{agent.findings ?? 0}</span> finding
-                    {agent.findings === 1 ? '' : 's'} reported
-                  </span>
-                  {agent.suggestions > 0 && (
-                    <span className="tabular-nums">
-                      <span className="text-foreground">{agent.suggestions}</span> suggested edit
-                      {agent.suggestions === 1 ? '' : 's'} written
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {agent.dropped_findings > 0 ? (
-                    <>
-                      {agent.dropped_findings} reported finding
-                      {agent.dropped_findings === 1 ? ' was' : 's were'} discarded because the line could
-                      not be found in the archived copy — Vulnix drops those instead of guessing a
-                      location. Prompt <InlineCode>{agent.prompt_version || 'agent'}</InlineCode>.
-                    </>
-                  ) : (
-                    <>
-                      Every reported finding pointed at a real line of the archived copy. Prompt{' '}
-                      <InlineCode>{agent.prompt_version || 'agent'}</InlineCode>.
-                    </>
-                  )}
-                </p>
-              </div>
-            ) : agentRun ? (
-              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                <Pill tone={TOOL_TONES[agentRun.status] || 'neutral'}>{humanize(agentRun.status)}</Pill>
-                The readout is written when the audit finishes. Follow the step trace below for the files
-                it is reading now.
-              </div>
-            ) : (
-              <EmptyState
-                icon={Wrench}
-                title="No AI review recorded"
-                description={
-                  isActive
-                    ? 'The agent appears here once the worker starts reading the archive.'
-                    : 'This audit ran with the agent turned off, or ended before it began. Only CLI tools contributed.'
                 }
-              />
-            )}
-          </Panel>
-
-          {router && (
-            <Panel
-              title="Agent Router & Specialist Swarm"
-              description="Multi-agent routing fanned findings out to specialist agents concurrently, merging intelligence and patches."
-            >
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <div className="rounded-lg border border-border bg-muted/40 p-3">
-                    <p className="text-xs text-muted-foreground">Routed Findings</p>
-                    <p className="text-xl font-semibold text-foreground mt-0.5 tabular-nums">
-                      {router.decisions ?? 0}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/40 p-3">
-                    <p className="text-xs text-muted-foreground">Specialist Calls</p>
-                    <p className="text-xl font-semibold text-foreground mt-0.5 tabular-nums">
-                      {router.dispatched ?? 0}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/40 p-3">
-                    <p className="text-xs text-muted-foreground">Merged Findings</p>
-                    <p className="text-xl font-semibold text-foreground mt-0.5 tabular-nums">
-                      {router.merged_findings ?? 0}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-muted/40 p-3">
-                    <p className="text-xs text-muted-foreground">Router Status</p>
-                    <div className="mt-1">
-                      <Pill tone="ai">Active · Swarm</Pill>
+              >
+                <AgentNode
+                  primary
+                  name={agent?.reviewer || (options.agent_review === false ? 'Autonomous review off' : 'Vulnix Agent')}
+                  role="Repository reviewer · hypothesis testing · cross-file investigation"
+                  status={primaryStatus}
+                >
+                  {agent && (
+                    <div className="mt-3 grid grid-cols-3 gap-2 border-t border-border/60 pt-3">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Files</p>
+                        <p className="mt-1 text-sm font-semibold tabular-nums text-foreground">{agent.files_reviewed ?? 0}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Investigations</p>
+                        <p className="mt-1 text-sm font-semibold tabular-nums text-foreground">{agent.investigations ?? 0}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Findings</p>
+                        <p className="mt-1 text-sm font-semibold tabular-nums text-foreground">{agent.findings ?? 0}</p>
+                      </div>
                     </div>
-                  </div>
+                  )}
+                </AgentNode>
+
+                <div className="my-4 flex items-center gap-3">
+                  <span className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                    Specialist dispatch
+                  </span>
+                  <span className="h-px flex-1 bg-border/70" />
+                  <span className="text-[11px] tabular-nums text-muted-foreground">{router?.dispatched ?? 0} calls</span>
                 </div>
 
-                {router.agent_calls && Object.keys(router.agent_calls).length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
-                    <span className="text-muted-foreground">Specialists invoked:</span>
-                    {Object.entries(router.agent_calls).map(([agentName, count]) => (
-                      <span
-                        key={agentName}
-                        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground"
-                      >
-                        <span className="size-1.5 rounded-full bg-primary" />
-                        <span className="capitalize">{agentName}Agent</span>
-                        <span className="text-muted-foreground">({count})</span>
-                      </span>
+                {specialists.length > 0 ? (
+                  <div className="space-y-2.5">
+                    {specialists.map(([name, calls]) => (
+                      <AgentNode
+                        key={name}
+                        name={SPECIALIST_NAMES[name] || `${humanize(name)} Agent`}
+                        role={SPECIALIST_ROLES[name] || 'Routed specialist analysis'}
+                        status={(router?.agent_errors?.[name] || 0) > 0 ? 'partial' : 'succeeded'}
+                        calls={calls}
+                        errors={router?.agent_errors?.[name] || 0}
+                      />
                     ))}
                   </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-border/80 px-3 py-4 text-[11px] leading-5 text-muted-foreground">
+                    {isActive
+                      ? 'No specialist dispatches yet. The router engages only when a finding matches a registered specialist.'
+                      : 'No specialist calls were recorded for this run.'}
+                  </div>
                 )}
-              </div>
+
+                {router && (
+                  <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-[11px] tabular-nums text-muted-foreground">
+                    <span>{router.decisions ?? 0} routing decisions</span>
+                    <span>{router.merged_findings ?? 0} findings after merge</span>
+                  </div>
+                )}
+              </Panel>
+
+              <Panel title="Investigation telemetry" description="Work performed beyond the initial file review">
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                  <Telemetry icon={Activity} label="Model calls" value={agent?.calls} />
+                  <Telemetry icon={BrainCircuit} label="Follow-ups" value={agent?.follow_ups} />
+                  <Telemetry icon={Terminal} label="Targeted reads" value={agent?.context_reads} />
+                  <Telemetry icon={Search} label="Searches" value={agent?.searches} />
+                  <Telemetry icon={Activity} label="Retries" value={agent?.retries} />
+                  <Telemetry icon={Wrench} label="Suggested edits" value={agent?.suggestions} />
+                </div>
+                {agent ? (
+                  <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-primary/20 bg-primary/[0.04] p-3">
+                    <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
+                    <div className="min-w-0 text-[11px] leading-5 text-muted-foreground">
+                      <p className="font-medium text-foreground">Evidence-bound review</p>
+                      <p className="mt-0.5">
+                        {agent.dropped_findings > 0
+                          ? `${agent.dropped_findings} unsupported or unlocatable finding${agent.dropped_findings === 1 ? ' was' : 's were'} discarded.`
+                          : 'Every accepted finding was checked against source in the stored archive.'}
+                        {agent.investigation_failures > 0 &&
+                          ` ${agent.investigation_failures} failed follow-up${agent.investigation_failures === 1 ? '' : 's'} preserved the last supported review.`}
+                      </p>
+                      <p className="mt-1">Protocol <InlineCode>{agent.prompt_version || 'agent'}</InlineCode></p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-[11px] leading-5 text-muted-foreground">
+                    Telemetry appears when the reviewer completes its first readout.
+                  </p>
+                )}
+              </Panel>
+            </div>
+
+            <Panel
+              title="Execution stream"
+              description="Persisted worker checkpoints in chronological order"
+              className="self-start"
+              actions={
+                <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.14em] text-primary">
+                  <span className={cn('size-1.5 rounded-full bg-primary', isActive && 'animate-pulse')} />
+                  {isActive ? 'Live' : 'Recorded'}
+                </span>
+              }
+            >
+              <ScanProgressTrace
+                variant="terminal"
+                steps={steps}
+                runs={toolRuns}
+                startedAt={scan.started_at}
+                endedAt={scan.completed_at}
+                active={isActive}
+              />
             </Panel>
-          )}
+          </div>
 
           <Panel
             title="Optional CLI tools"
-            description="analyzers installed on this server — an absent tool is a note, never a failed audit"
+            description="only run when this audit opts in — an absent tool is a note, never a failed audit"
             flush={cliRuns.length > 0}
           >
             {cliRuns.length === 0 ? (
               <EmptyState
                 icon={Wrench}
-                title={isActive ? 'No CLI tool has reported yet' : 'No CLI tool contributed'}
+                title={
+                  !cliRequested
+                    ? 'No CLI tool was asked for'
+                    : isActive
+                      ? 'No CLI tool has reported yet'
+                      : 'No CLI tool contributed'
+                }
                 description={
-                  isActive
-                    ? 'Each enabled tool appears here as it starts and finishes.'
-                    : 'semgrep, bandit, gitleaks, trivy and pip-audit are only run when installed here. The AI review above is the scanner.'
+                  !cliRequested
+                    ? 'The AI agent is the scanner. Static analysis, secret detection and dependency analysis add findings only when an audit asks for them.'
+                    : isActive
+                      ? 'Each enabled tool appears here as it starts and finishes.'
+                      : 'semgrep, bandit, gitleaks, trivy and pip-audit are only run when installed here. The AI review above is the scanner.'
                 }
               />
             ) : (
@@ -769,30 +891,23 @@ export function AuditRunDetail() {
             )}
           </Panel>
 
-          <Panel title="Requested options" description="What was asked for when this audit started">
+          <Panel
+            title="Requested options"
+            description="What was asked for when this audit started"
+          >
             <div className="flex flex-wrap gap-2">
               <Pill tone={options.agent_review === false ? 'neutral' : 'ai'}>AI agent review</Pill>
               <Pill tone={options.static_analysis ? 'success' : 'neutral'}>
-                Static analysis
+                Static analysis{options.static_analysis ? '' : ' (off)'}
               </Pill>
-              <Pill tone={options.secrets ? 'success' : 'neutral'}>Secret detection</Pill>
-              <Pill tone={options.dependencies ? 'success' : 'neutral'}>Dependency analysis</Pill>
+              <Pill tone={options.secrets ? 'success' : 'neutral'}>
+                Secret detection{options.secrets ? '' : ' (off)'}
+              </Pill>
+              <Pill tone={options.dependencies ? 'success' : 'neutral'}>
+                Dependency analysis{options.dependencies ? '' : ' (off)'}
+              </Pill>
             </div>
           </Panel>
-
-          {(isActive || steps.length > 0) && (
-            <Panel
-              title="Step trace"
-              description="Every checkpoint the worker reported for this audit, in order"
-            >
-              <ScanProgressTrace
-                steps={steps}
-                runs={toolRuns}
-                startedAt={scan.started_at}
-                active={isActive}
-              />
-            </Panel>
-          )}
         </>
       )}
 

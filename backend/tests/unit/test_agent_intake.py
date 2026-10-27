@@ -10,6 +10,13 @@ def test_only_reviewable_source_is_a_candidate() -> None:
     assert is_candidate("src/api/client.ts")
     assert is_candidate("Dockerfile")
     assert is_candidate("infra/main.tf")
+    # The agent is the only secret scanner by default, so it has to see the
+    # surfaces a CLI secret sweep used to cover: prose, templates and env files.
+    assert is_candidate("README.md")
+    assert is_candidate("views/index.html")
+    assert is_candidate("scripts/deploy.ps1")
+    assert is_candidate("config/.npmrc")
+    assert is_candidate("app/.env.production")
     # Generated, binary or dependency trees are noise, not code under review.
     assert not is_candidate("package-lock.json")
     assert not is_candidate("app.min.js")
@@ -17,7 +24,8 @@ def test_only_reviewable_source_is_a_candidate() -> None:
     assert not is_candidate("dist/bundle.ts")
     assert not is_candidate(".venv/lib/site.py")
     assert not is_candidate("logo.png")
-    assert not is_candidate("README.md")
+    assert not is_candidate("app/.env.example")
+    assert not is_candidate(".gitignore")
 
 
 def test_select_files_orders_deterministically_and_respects_budget(tmp_path) -> None:

@@ -85,23 +85,23 @@ function uploadWithProgress(projectId, file, onProgress) {
 const OPTION_ROWS = [
   {
     key: 'agent_review',
-    label: 'AI review',
-    description: 'Review source code for security issues.',
+    label: 'AI agent review',
+    description: 'The agent reads the source, follows it across files and reports verified findings.',
   },
   {
     key: 'static_analysis',
     label: 'Static analysis',
-    description: 'Semgrep and Bandit, when installed.',
+    description: 'Optional CLI pass - semgrep and bandit, when installed on this server.',
   },
   {
     key: 'secrets',
     label: 'Secret detection',
-    description: 'Find exposed credentials with Gitleaks.',
+    description: 'Optional CLI pass - gitleaks, when installed on this server.',
   },
   {
     key: 'dependencies',
     label: 'Dependency analysis',
-    description: 'Check packages for known vulnerabilities.',
+    description: 'Optional CLI pass - pip-audit and trivy, when installed on this server.',
   },
 ]
 
@@ -123,9 +123,9 @@ export function NewScan() {
   const [error, setError] = useState(null)
   const [options, setOptions] = useState({
     agent_review: true,
-    static_analysis: true,
-    secrets: true,
-    dependencies: true,
+    static_analysis: false,
+    secrets: false,
+    dependencies: false,
   })
 
   const [phase, setPhase] = useState('idle')
@@ -612,7 +612,9 @@ export function NewScan() {
         <section className="space-y-4 border-b border-border pb-7">
           <div>
             <h2 className="text-sm font-semibold text-foreground">Checks</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Choose what to include.</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              The AI agent is the scanner. CLI analysers are optional extra inputs, off by default.
+            </p>
           </div>
           <div className="grid gap-x-8 divide-y divide-border sm:grid-cols-2 sm:divide-y-0">
             {OPTION_ROWS.map((option) => (
@@ -623,10 +625,12 @@ export function NewScan() {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <Label htmlFor={option.key}>{option.label}</Label>
-                    {option.key === 'agent_review' && (
+                    {option.key === 'agent_review' ? (
                       <Pill tone="ai" icon={Bot}>
-                        Core
+                        Scanner
                       </Pill>
+                    ) : (
+                      <Pill tone="neutral">Optional</Pill>
                     )}
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground">{option.description}</p>
@@ -646,7 +650,7 @@ export function NewScan() {
             <Alert variant="destructive" className="mt-4">
               <Info />
               <AlertDescription>
-                Turn on at least one check.
+                Turn on at least one check. With AI review off, only a CLI tool can produce findings.
               </AlertDescription>
             </Alert>
           )}

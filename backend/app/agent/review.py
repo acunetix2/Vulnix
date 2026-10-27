@@ -33,7 +33,7 @@ from app.agent.prompts import (
 )
 from app.agent.schema import AgentFinding, AgentReview
 from app.ai.catalog import alias_for
-from app.ai.providers.ollama import ProviderResult, provider_for
+from app.ai.providers.ollama import ProviderResult, provider_for, retry_wait_seconds
 from app.ai.redaction import redact
 from app.ai.service import check_quota, record_usage, selected_entry
 from app.core.config import settings
@@ -58,7 +58,15 @@ _RETRYABLE_CODES = frozenset({"AI_UNAVAILABLE", "AI_INVALID_OUTPUT"})
 # The subset of failures that mean "this file could not be read" rather than
 # "stop the review". A quota or rate trip is the second kind: the next file
 # would hit the same wall, so the review ends and says which one it was.
-_CONTINUE_CODES = _RETRYABLE_CODES | {"AI_MISCONFIGURED"}
+# A truncated answer is the first kind: one long file can exceed the output cap,
+# and asking it again would buy the same truncation, so it is recorded and the
+# next file is read instead. A file too wide for every configured reviewer is the
+# same shape: the next file usually fits.
+_CONTINUE_CODES = _RETRYABLE_CODES | {
+    "AI_MISCONFIGURED",
+    "AI_OUTPUT_TRUNCATED",
+    "AI_CONTEXT_OVERFLOW",
+}
 
 
 def _backoff_seconds(retry: int) -> float:
@@ -223,6 +231,13 @@ def _generate(
         if tries >= attempts:
             break
         wait = _backoff_seconds(tries)
+        # Sleeping the backoff while every reviewer in the chain rests spends the
+        # remaining attempts on closed doors, so wait at least until one wakes. The
+        # backoff itself is never shortened - and if the wait runs past the
+        # deadline, say so now rather than after seven more requests that never send.
+        resting = retry_wait_seconds(provider)
+        if resting > wait:
+            wait = resting
         if time.monotonic() + wait > deadline:
             step(label, "failed", "Out of time before the next retry")
             break
@@ -382,7 +397,18 @@ def run_agent_review(
         files_skipped=intake["skipped_binary"] + intake["skipped_empty"] + intake["skipped_over_budget"]
     )
     if not files:
-        step("AI agent review", "skipped", "No reviewable source files")
+        # Say which of the two honest reasons this is: an archive with no source
+        # in it at all, or source that could not be read. Never both at once.
+        detail = (
+            "Archive contains no source files"
+            if not intake["candidates"]
+            else f"{intake['candidates']} file(s) found, none readable as source"
+        )
+        if intake["skipped_binary"]:
+            detail += f"; {intake['skipped_binary']} binary"
+        if intake["skipped_empty"]:
+            detail += f"; {intake['skipped_empty']} empty"
+        step("AI agent review", "skipped", detail)
         return _stopped(outcome, started, "skipped", "NO_SOURCE")
 
     step("AI agent review", "running", f"{len(files)} file(s) to read")

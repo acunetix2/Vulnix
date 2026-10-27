@@ -10,7 +10,15 @@ SAFE_ZIP = {
 
 def test_health_and_ready(client) -> None:
     assert client.get("/health").json() == {"status": "ok"}
-    assert client.get("/api/v1/ready").status_code == 200
+    ready = client.get("/api/v1/ready")
+    assert ready.status_code == 200
+    components = ready.json()
+    # The endpoint is typed dict[str, str], so a numeric or boolean field would
+    # fail to serialize and make readiness itself the thing that is broken.
+    assert all(isinstance(value, str) for value in components.values())
+    for slot in ("ai_hosted_primary", "ai_hosted_secondary", "ai_hosted_tertiary"):
+        assert components[slot] in {"configured", "not_configured"}
+    assert components["ai_fallback"] in {"enabled", "disabled"}
 
 
 def test_full_scan_flow(client, login, fake_scanner, make_zip) -> None:
@@ -176,8 +184,9 @@ def test_idempotency_key_replays_same_scan(
 def test_scan_without_available_scanners_fails_gracefully(
     client, login, project_factory, make_zip
 ) -> None:
-    # Explicitly disable the agent so this exercises the CLI-only failure path
-    # against whatever real tools the host has.
+    # Explicitly disable the agent and opt into the CLI category, so this
+    # exercises the CLI-only failure path against whatever real tools the host
+    # has. Tools are opt-in now, so asking for nothing is a different error.
     login()
     ids = project_factory()
     upload = client.post(
@@ -186,7 +195,7 @@ def test_scan_without_available_scanners_fails_gracefully(
     ).json()
     scan = client.post(
         f"/api/v1/projects/{ids['project_id']}/scans",
-        json={"upload_id": upload["id"], "options": {"agent_review": False}},
+        json={"upload_id": upload["id"], "options": {"agent_review": False, "static_analysis": True}},
     ).json()
     assert scan["status"] == "failed"
     assert scan["error_code"] == "ALL_SCANNERS_FAILED"
@@ -198,6 +207,33 @@ def test_scan_without_available_scanners_fails_gracefully(
     assert all(run["status"] in ("failed", "skipped") for run in scanner_runs)
     assert all(run["error_code"] for run in scanner_runs)
     assert client.get("/api/v1/findings/does-not-exist").status_code == 404
+
+
+def test_default_options_run_the_agent_and_no_cli_tool(
+    client, login, project_factory, make_zip
+) -> None:
+    # The product model: every audit is an AI audit. A scan that asks for nothing
+    # must not spawn semgrep, bandit, gitleaks, pip-audit or trivy.
+    from app.scanning.adapters import build_adapters
+    from app.schemas.scans import ScanOptions
+
+    options = ScanOptions().model_dump()
+    assert options["agent_review"] is True
+    assert build_adapters(options) == []
+    assert build_adapters({}) == []
+    assert [a.name for a in build_adapters({"static_analysis": True})] == ["semgrep", "bandit"]
+
+    login()
+    ids = project_factory()
+    upload = client.post(
+        f"/api/v1/projects/{ids['project_id']}/uploads",
+        files={"file": ("s.zip", make_zip(SAFE_ZIP), "application/zip")},
+    ).json()
+    scan = client.post(f"/api/v1/projects/{ids['project_id']}/scans", json={"upload_id": upload["id"]}).json()
+    detail = client.get(f"/api/v1/scans/{scan['id']}").json()
+    assert [run["tool_name"] for run in detail["tool_runs"]] == ["agent"]
+    assert detail["options"]["static_analysis"] is False
+    assert detail["error_code"] == "AI_DISABLED"  # no reviewer is configured in tests
 
 
 def test_upload_rate_limit_returns_429(client, login, project_factory, make_zip, monkeypatch) -> None:
@@ -219,6 +255,37 @@ def test_upload_rate_limit_returns_429(client, login, project_factory, make_zip,
         files={"file": ("again.zip", make_zip(SAFE_ZIP), "application/zip")},
     )
     assert limited.json()["error"]["code"] == "RATE_LIMITED"
+
+
+def test_a_crashed_scan_is_reported_failed_not_as_a_fifty_and_a_zombie(
+    client, login, project_factory, make_zip, monkeypatch
+) -> None:
+    """The job row was committed before the work started, so a crash is a result.
+
+    One live run lost its database connection inside a hosted model call: the
+    request answered 500 and the scan stayed ``running`` after the process had
+    stopped, which is a state the console repeats on every poll.
+    """
+    from app.scanning import pipeline
+
+    def crash(db, scan, upload, workdir):
+        raise RuntimeError("the connection went away mid-review")
+
+    monkeypatch.setattr(pipeline, "_run_scan", crash)
+    login()
+    ids = project_factory()
+    upload = client.post(
+        f"/api/v1/projects/{ids['project_id']}/uploads",
+        files={"file": ("s.zip", make_zip(SAFE_ZIP), "application/zip")},
+    ).json()
+    resp = client.post(
+        f"/api/v1/projects/{ids['project_id']}/scans", json={"upload_id": upload["id"]}
+    )
+    assert resp.status_code == 202
+    detail = client.get(f"/api/v1/scans/{resp.json()['id']}").json()
+    assert detail["status"] == "failed"
+    assert detail["error_code"] == "INTERNAL_ERROR"
+    assert detail["completed_at"] is not None
 
 
 def test_scan_rate_limit_returns_429(

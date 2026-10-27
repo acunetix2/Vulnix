@@ -7,12 +7,16 @@ from pydantic import BaseModel, Field
 
 
 class ScanOptions(BaseModel):
-    """The agent is the scanner; the CLI tools below are optional inputs."""
+    """The agent is the scanner; the CLI tools below are opt-in extras.
+
+    They default to off, so an audit with no explicit options runs the agent
+    alone. A tool is never a required stage and its absence never fails a run.
+    """
 
     agent_review: bool = True
-    static_analysis: bool = True
-    secrets: bool = True
-    dependencies: bool = True
+    static_analysis: bool = False
+    secrets: bool = False
+    dependencies: bool = False
 
 
 class ScanCreate(BaseModel):

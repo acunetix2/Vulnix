@@ -5,6 +5,7 @@ A focused security workspace for developers. The interface should feel like a pr
 
 ## Visual direction
 - Default theme: clean light UI; optional dark theme.
+- Every surface follows the selected theme, including the audit run console. That console is allowed its own emerald palette so it reads as one deliberate operations surface, but the palette is declared twice — light as the base, dark under `.dark` — and never pinned to one theme.
 - Palette: Clean, readable, and suitable for long code reviews and detailed vulnerability reports.
 
 #F8FAFC Background

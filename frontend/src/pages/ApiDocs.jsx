@@ -549,7 +549,8 @@ export function ApiDocs() {
               </div>
               <p className="text-[11px] leading-normal text-muted-foreground">
                 A run walks your files with a reviewer and reports what it reads. Semgrep, Gitleaks, Bandit,
-                pip-audit and Trivy are optional inputs that add evidence when they are installed.
+                pip-audit and Trivy are optional inputs a run uses only when it explicitly asks for them;
+                by default an audit starts no CLI process at all.
               </p>
             </div>
             <div className="space-y-1.5 rounded-lg border border-border bg-card p-3.5">
@@ -696,7 +697,7 @@ curl -s $BASE/scans/$SCAN -H "Authorization: Bearer $TOKEN" \\
               ['QUOTA_EXCEEDED', '429', 'Tomorrow', 'Daily reviewer credits are spent.'],
               ['CONFLICT', '409', 'No', 'The row is in a state that forbids this change.'],
               ['UPLOAD_TOO_LARGE / UNSAFE_ARCHIVE', '413 / 400', 'No', 'The source broke an intake limit — see Archive & egress guards.'],
-              ['AI_DISABLED / AI_MODEL_UNAVAILABLE', '409 / 503', 'Later', 'No reviewer is switched on, or the one selected is not answering.'],
+              ['AI_DISABLED / AI_MODEL_UNAVAILABLE', '503 / 422', 'No / Later', 'No reviewer is switched on, or the selected one is not in the live catalog right now.'],
             ]}
           />
           <h3 className="pt-2 text-sm font-semibold text-foreground">Cursor pagination</h3>
@@ -854,10 +855,10 @@ curl -s $BASE/scans/$SCAN -H "Authorization: Bearer $TOKEN" \\
             <ParamTable
               rows={[
                 ['upload_id', 'string', true, 'The snapshot to read.'],
-                ['options.agent_review', 'boolean', false, 'Walk the tree with a reviewer. Default true.'],
-                ['options.static_analysis', 'boolean', false, 'Ask the installed static-analysis CLIs for evidence. Default true.'],
-                ['options.secrets', 'boolean', false, 'Secret-detection pass. Default true.'],
-                ['options.dependencies', 'boolean', false, 'Manifest and lockfile review. Default true.'],
+                ['options.agent_review', 'boolean', false, 'The scanner: walk the tree with the AI agent. Default true.'],
+                ['options.static_analysis', 'boolean', false, 'Optional extra evidence from installed static-analysis CLIs. Default false.'],
+                ['options.secrets', 'boolean', false, 'Optional gitleaks pass. The agent already reads secrets in source. Default false.'],
+                ['options.dependencies', 'boolean', false, 'Optional manifest and lockfile CLI review. Default false.'],
               ]}
             />
           </Endpoint>
@@ -869,8 +870,8 @@ curl -s $BASE/scans/$SCAN -H "Authorization: Bearer $TOKEN" \\
   "project_id": "…uuid…",
   "upload_id": "…uuid…",
   "status": "queued",
-  "options": { "agent_review": true, "static_analysis": true,
-               "secrets": true, "dependencies": true },
+  "options": { "agent_review": true, "static_analysis": false,
+               "secrets": false, "dependencies": false },
   "summary": null,
   "error_code": null,
   "started_at": null,
@@ -1016,9 +1017,10 @@ curl -s $BASE/scans/$SCAN -H "Authorization: Bearer $TOKEN" \\
           </Endpoint>
           <List>
             <li>Switching reviewers spends nothing. Only a reply costs.</li>
-            <li>If a local reviewer does not answer in time and failover is configured, the reply still comes
-              back under an alias, flagged <InlineCode>fallback: true</InlineCode> so the console can say it
-              came from somewhere else.</li>
+            <li>If the reviewer you selected does not answer in time, or cannot hold the text it was given,
+              the request goes to the next configured reviewer. The reply still comes back under an alias,
+              flagged <InlineCode>fallback: true</InlineCode> so the console can say it came from somewhere
+              else. A reviewer that fails is rested before it is asked again, and a handover costs no credit.</li>
           </List>
         </section>
 
@@ -1052,11 +1054,13 @@ curl -s $BASE/scans/$SCAN -H "Authorization: Bearer $TOKEN" \\
           <ParamTable
             columns={['Code', 'Status', 'Retry', 'When']}
             rows={[
-              ['AI_DISABLED', '409', 'No', 'No reviewer is enabled on this deployment.'],
-              ['AI_MISCONFIGURED', '500', 'No', 'The deployment is switched on but has no usable endpoint or credential.'],
-              ['AI_MODEL_UNAVAILABLE', '503', 'Later', 'That reviewer is not answering right now.'],
-              ['AI_UNAVAILABLE', '503', 'Later', 'The call failed or ran out of time.'],
+              ['AI_DISABLED', '503', 'No', 'No reviewer is enabled on this deployment.'],
+              ['AI_MODEL_UNAVAILABLE', '422', 'Later', 'The entry you selected is not in the live catalog right now.'],
+              ['AI_UNAVAILABLE', '503', 'Later', 'Every reviewer refused or ran out of time. One that fails is rested briefly before it is asked again.'],
+              ['AI_MISCONFIGURED', '503 / 502', 'No', 'No usable endpoint or credential here, or a reviewer refused the request for a reason that is not about its width. The refusal text it sent is never passed on.'],
               ['AI_INVALID_OUTPUT', '502', 'Later', "The reply did not hold together as the required shape — nothing is stored."],
+              ['AI_OUTPUT_TRUNCATED', '502', 'No', "The reply reached the output limit, so it is reported rather than re-asked somewhere else."],
+              ['AI_CONTEXT_OVERFLOW', '413', 'No', 'The text to review is wider than that reviewer can read at once — refused before the request is sent, or read from the reviewer\'s own reason code. The audit continues on a wider one, and that reviewer is not rested for it.'],
             ]}
           />
           <p className="text-xs leading-relaxed text-muted-foreground">
@@ -1267,7 +1271,10 @@ function verify(rawBody, header, timestamp, secret, toleranceSeconds = 300) {
               ['Audits started per user, per hour', '20', 'scan_rate_per_hour'],
               ['Whole-run timeout', '900 s', 'scan_total_timeout_seconds'],
               ['One optional tool', '300 s', 'scanner_timeout_seconds'],
-              ['Reviewer call', '20 s (30 s on failover)', 'ai_timeout_seconds'],
+              ['Reviewer call, local', '20 s', 'ai_timeout_seconds'],
+              ['Reviewer call, hosted', '30–45 s each', 'one timeout per hosted reviewer'],
+              ['Rest after a reviewer fails', '60 s', 'ai_provider_cooldown_seconds'],
+              ['Reply length, hosted', '2,048 tokens', 'ai_max_output_tokens'],
               ['Reviewer answers per user per day', '300', 'ai_daily_quota_per_user'],
               ['Outbound read per delivery', '64 KiB', 'integration_max_body_bytes'],
             ]}

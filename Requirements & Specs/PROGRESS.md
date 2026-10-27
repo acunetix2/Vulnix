@@ -1,6 +1,6 @@
 # Project Progress
 
-**Last updated:** 2026-10-22
+**Last updated:** 2026-10-27
 **Overall status:** Backend MVP implemented and verified (Phase 1–4 backend scope); console UI redesigned; Slack/Jira/webhook integrations implemented end-to-end and off by default; consent-window (OAuth) connections for Slack, Jira and GitHub plus GitHub repository import implemented in the backend; AI review works against a hosted Groq model with a switchable per-workspace selection and a durable credit ledger; the console has a working account surface and a collapsible, nested sidebar
 **Current milestone:** OAuth backend shipped (ADR-010); the Connect-button UI and the credits heatmap remain
 
@@ -375,3 +375,197 @@ Commands run and outcomes:
 - `backend/.env.example`, the local environment's non-secret setup comments, API_SPEC, DECISIONS and TASKS
   now record both callbacks and the Email addresses permission. Provider-side changes and a real retry
   remain with the operator, so neither live flow is claimed fixed yet.
+
+## Verification log (2026-10-27, autonomous audit console)
+- Rebuilt the audit detail as a dark emerald operations console: run-state/file/finding/runtime telemetry,
+  the real primary reviewer, only actually dispatched specialist agents, investigation reads/searches/
+  retries/suggestions, evidence-validation status, and a chronological terminal view of persisted worker
+  checkpoints. No agents, scores, approvals or activity are fabricated.
+- The application now uses the installed Geist Mono Variable font globally. The audit surface has scoped
+  dark tokens so severity colors, findings, tables and existing dialogs retain their established behavior.
+- `npx eslint src/pages/AuditRunDetail.jsx src/components/app/ScanProgressTrace.jsx` — clean;
+  `npm run build` — succeeded (the existing large-chunk advisory remains); targeted `git diff --check` —
+  clean.
+- An isolated Vite server on port 5199 rendered without console errors and computed the global body font as
+  Geist Mono Variable, then was stopped. The audit route redirected to sign-in because no backend/session
+  was available; the in-app browser also reported a 0x0 hidden viewport. The populated audit page and its
+  live interactions are therefore not claimed browser-verified.
+
+## Verification log (2026-10-27, AI-only audits and no-source reporting)
+- Root cause of the CLI tools still running: `ScanOptions` defaulted `static_analysis`, `secrets` and
+  `dependencies` to `true` **and** `build_adapters()` used `.get(key, True)`, so every audit — including a
+  client that sent no options — launched semgrep, bandit, gitleaks, pip-audit and trivy as required stages.
+  The frontend New Audit form also switched all four on. Both backend defaults are now `false`, the form
+  starts with AI review only, and the CLI rows are labelled optional. Adapters are untouched and still run
+  when a caller opts in. Recorded as ADR-014, which revises ADR-001.
+- `_decide()` no longer reports `ALL_SCANNERS_FAILED` for a run that asked for nothing: agent off plus no
+  CLI category is now `NO_ANALYSIS_REQUESTED`.
+- `NO_SOURCE` reporting: the skipped step said only "No reviewable source files". It now states whether the
+  archive held no source at all or none of the candidates could be read, with the counts and the audit
+  detail explaining the code in plain terms.
+- Agent intake could not see whole repositories, which is what made that run look empty while a review
+  should have been possible. `.md`, `.html`/`.ejs`/`.hbs`/`.pug`, `.json`, `.xml`, `.properties`, `.ps1`,
+  `.proto`, `.graphql`, `.ipynb`, `.svelte`/`.astro`, Elixir/Dart/Lua/Scala/Groovy/Perl/Objective-C/Zig and
+  `.env.*`, `.npmrc`, `.pypirc`, `.netrc`, `.git-credentials` are now reviewable, because the agent — not
+  gitleaks or pip-audit — is the default secret and dependency reviewer. Lockfiles, minified bundles,
+  generated trees and `.env.example` remain excluded.
+- Backend startup: SQLAlchemy 2.1.6's compiled `_immutabledict_cy` extension is blocked by Windows
+  Application Control on this machine, so `import sqlalchemy` failed before the app could load. Pinned to
+  `sqlalchemy>=2.0.36,<2.1` and installed 2.0.55; the app imports and serves `/health`.
+- `/health` had been widened to return the agent swarm registry. Reverted to liveness-only `{"status":"ok"}`:
+  it is unauthenticated, redundant with `/api/v1/ready`, and it is what the two failing tests asserted.
+- `python -m pytest -q -p no:randomly` on `tests/unit/test_agent_intake.py tests/unit/test_adapters.py
+  tests/integration/test_flow.py tests/integration/test_agent_scan.py tests/unit/test_health.py` —
+  **54 passed**, no failures and no skips. Includes a new `test_default_options_run_the_agent_and_no_cli_tool`
+  that asserts a scan created with no options stores exactly one tool run (`agent`) and starts no adapter.
+- `npx eslint src/pages/AuditRunDetail.jsx src/pages/NewScan.jsx` — clean; `npm run lint` and
+  `npm run build` — succeeded.
+- `ruff check app tests` still reports 9 pre-existing findings in files this change did not touch
+  (`agent/code_agent.py`, `agent/dep_agent.py`, `agent/intel_agent.py`, `agent/router.py`, `main.py:109`,
+  `modules/auth/routes.py`, `modules/scans/routes.py`). None come from the edited lines.
+- No real AI call, upload, GitHub import or database write was made. The failed audit that prompted this
+  was read from its persisted run; a fresh end-to-end audit against a live repository is not yet verified.
+
+## Verification log (2026-10-27, hosted reviewer chain and the app footer graphic)
+- The internal reviewer now has a failover chain instead of one hosted slot. All three hosted reviewers
+  share one `_OpenAIChatProvider` request shape, each keeps its own credential and never borrows another's,
+  links are opened lazily, and a reviewer that fails is parked for `ai_provider_cooldown_seconds` before it
+  is asked again. `FallbackProvider` now wraps any primary, hosted included, and triggers on
+  `AI_UNAVAILABLE`, `AI_MISCONFIGURED` and `AI_CONTEXT_OVERFLOW`. Recorded as ADR-015, which revises ADR-008
+  decisions 3, 4 and 5.
+- Two request bounds that did not exist before: `ai_max_output_tokens` is sent as `max_tokens` so a reply
+  cannot be billed open-ended (a truncated reply raises `AI_OUTPUT_TRUNCATED` and is reported, not re-asked
+  elsewhere), and `_approx_tokens` refuses an over-wide prompt with `AI_CONTEXT_OVERFLOW` (413) **before** a
+  socket opens, so a guaranteed-failure call costs nothing. The audit retry loop continues past both but
+  `AI_CONTEXT_OVERFLOW` is deliberately absent from `_RETRYABLE_CODES`, so the 8-attempt loop never re-fires
+  a certain overflow.
+- The OpenRouter probe matched models by prefix, which would have reported a paid variant as reachable when
+  only the `:free` entry exists (or the reverse). It now matches the exact reported id including the suffix.
+- A defect introduced by this change and caught only by the full suite: `/api/v1/ready` is typed
+  `dict[str, str]`, so the integer `ai_failover_links` field failed FastAPI response serialization and made
+  readiness itself the broken component. The field is removed (nothing consumed it), handover depth is
+  stated as `ai_fallback` on/off, and `tests/integration/test_flow.py` now asserts every component value is
+  a string so this class of breakage cannot return silently.
+- Docs and console copy brought in line with the code: API_SPEC `/ready` and the AI error-code section
+  (`AI_OUTPUT_TRUNCATED`, `AI_CONTEXT_OVERFLOW`), AI_ENGINE §5.1 selection/handover/provenance, TASKS Phase 4,
+  the `/docs` guardrails and error tables — two of which published wrong statuses (`AI_DISABLED` 409 → 503,
+  `AI_MODEL_UNAVAILABLE` 503 → 422, `AI_MISCONFIGURED` 500 → 503/502, verified against `ai/service.py` and
+  `providers/ollama.py` first) — plus the audit-detail hints and the finding-detail fallback sentence.
+- `python -m pytest -q -p no:randomly tests` — **345 passed**, 1 pre-existing upstream deprecation warning,
+  no failures, no skips.
+- `ruff check app tests` — the same 9 pre-existing findings in files this change did not touch; none on an
+  edited line. `npx eslint` on every changed frontend file — clean. `npm run build` — succeeded.
+- App footer graphic: the console shell now mounts `VulnixLegalGraphicBanner` through a `banner` prop on
+  `VulnixFooter`, only from `components/layout/Layout.jsx`. The shared banner component is untouched and
+  renders at its own size, exactly as the landing, legal, help, sign-in and docs pages already mount it.
+  An intermediate version narrowed it to a bordered card; that was reverted on feedback, so the only
+  remaining diff is the `{banner && <VulnixLegalGraphicBanner />}` line plus the prop.
+- Not claimed verified: the console footer itself was never seen rendered. Every `/app/**` route sits behind
+  `ProtectedRoute`, and minting a real session against the production identity provider is off-limits, so
+  the only browser access available was public pages. `components/app/VulnixFooter.jsx` importing from
+  `pages/landing/legal/` is a layering smell worth fixing if the banner is ever shared more widely.
+- No real AI call, upload, GitHub import or database write was made. A scratch backend on 127.0.0.1:8124
+  with its own throwaway SQLite reported `ai_hosted_primary: configured`, `ai_hosted_secondary: configured`,
+  `ai_hosted_tertiary: not_configured` — the operator has a Gemini credential but no OpenRouter key yet, so
+  that link is untested against a live provider. All scratch servers and that database were stopped and
+  deleted.
+
+## Verification log (2026-10-27, live-run failures, local reviewer withdrawn, console theme)
+- Backend suite: `python -m pytest -q -p no:randomly tests` — **363 passed**, 1 upstream deprecation warning,
+  no failures, no skips, in 651 s. Covered by this run: the crash-recording and trace-retry tests
+  (`tests/unit/test_scan_recovery.py`, 6 tests), the refusal-classification and cooldown-aware retry tests
+  (`tests/unit/test_ai_providers.py`, 43 tests), the catalog default-hiding tests
+  (`tests/unit/test_ai_catalog.py`, 26 tests), the stale-local-selection fallback
+  (`tests/unit/test_ai_service.py`) and an integration test that a crashed scan answers 202 and then reports
+  `failed` / `INTERNAL_ERROR` / `completed_at` instead of a 500 and a `running` zombie
+  (`tests/integration/test_flow.py`, 12 tests).
+- `ruff check app tests` — 9 findings, all pre-existing at HEAD and none on an edited line
+  (`agent/code_agent.py:26`, `agent/dep_agent.py:12`, `agent/intel_agent.py:135`, `agent/router.py:22,56`,
+  `main.py:109`, `modules/auth/routes.py:600,602`, `modules/scans/routes.py:3`). One unused import this
+  change introduced (`mark_healthy` in `tests/unit/test_ai_providers.py`) was removed; the count is back to
+  the pre-existing 9.
+- The local reviewer is withdrawn, not deleted (`ADR-017`). `VULNIX_AI_LOCAL_ENABLED=false` means
+  `GET /api/tags` is never requested — the test asserts no `/api/tags` URL is hit — the boot default is
+  `groq`, `Vulnix Edge` is out of severity routing (`info` now prefers `Vulnix Sprint`), and the unused
+  duplicate severity map in `app/ai/catalog.py` (`_SEVERITY_ALIAS_ORDER` / `preferred_for_severity()`) was
+  deleted so only the one the agent actually uses remains. `OllamaProvider`, `VULNIX_AI_BASE_URL`,
+  `VULNIX_AI_NUM_CTX`, `VULNIX_AI_DISABLE_THINK` and the `Vulnix Edge` alias all stay, and the catalog tests
+  now set the gate on explicitly, so both the shipped default and the opt-in path are covered.
+- `frontend/src/pages/landing/product/AIReview.jsx` no longer advertises "Ollama (default) — fully local,
+  zero egress", and its FAQ answers with reviewer failover instead of a provider list. One fabricated
+  testimonial that named Ollama on the same page was rewritten vendor-free; the rest of that testimonial
+  block is still fake and is still open work (task #34).
+- **Open action for the operator:** `backend/.env.example` committed a real-looking OpenRouter key
+  (`sk-or-v1-…`, 64 hex) at `013f96d`. It is blanked in the working tree and every tracked file was scanned
+  for other credential shapes — the remaining hits are synthetic scanner fixtures — but the value is in git
+  history and must be revoked or rotated at the vendor. No history rewrite was attempted and nothing was
+  committed or pushed. (ADR-018)
+- Audit detail page theme bug (ADR-019): `.audit-ops` in `frontend/src/index.css` declared the console token
+  set dark-only and unconditionally, so the page ignored the theme control while every other `/app` page
+  followed it. The palette is now light-as-base with `.dark .audit-ops` replacing it, the glow/grid/shadow
+  are variables instead of literals, `color-scheme` is set per palette, and the terminal scrollbar uses
+  `var(--border-strong)`. Dark values are unchanged value for value.
+- How that was verified without a session: `/app/**` is behind `ProtectedRoute` and this agent has no
+  credentials, so the real page could not be opened — navigating to it redirected to `/signin`. Verification
+  used the built stylesheet against a scratch document reproducing the page's class structure
+  (`audit-ops` → `audit-command` → `bg-card` → `bg-primary-subtle text-primary` → `audit-terminal`) and read
+  computed styles in both themes. Every measured property changed with the theme — `color-scheme`, the radial
+  glow, the border, `--canvas`, card background, foreground, muted text, the primary chip pair and the
+  scrollbar thumb — and the list of properties that did **not** change came back empty. Dark read back the
+  same values as before (`#070c0a`, `rgb(13,21,17)`, `#41e69a`); light reads `#e8f0eb`, `rgb(255,255,255)`,
+  `#047857`. The scratch harness lived outside the repository and was deleted.
+- Not claimed verified: the populated audit console (its real trace rows, findings table and popovers) has
+  still never been seen rendered by this agent, in either theme. `npm run build` proves the rules compile and
+  emit `.audit-ops` and `.dark .audit-ops`; it says nothing about whether the light console looks right at
+  real data density. That check is the operator's, on their own logged-in session.
+- `npx eslint` clean and `npm run build` succeeded on the changed frontend files
+  (`pages/ApiDocs.jsx`, `pages/landing/product/AIReview.jsx`, `src/index.css`).
+
+## Verification log (2026-10-27, a failed live audit read backwards)
+
+An operator pasted a real failed run: reviewer `Vulnix Fast`, two model calls, one retry, every AI
+checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an execution stream reading
+`6/6 checkpoints complete · runtime 36m 39s`. Two separate things came out of it.
+
+- The runtime is a display fault, fixed under ADR-020. `ScanProgressTrace` derived `elapsed` from a
+  `now` state that only refreshes while the run is active, so for any finished run it subtracted
+  `started_at` from the moment the page mounted. The number was a calendar reading, not a duration, and
+  it grew the longer the audit sat in the list — it never implied the retry loop ran for 2199 seconds
+  against a 900-second budget. `RunDuration` on the same page already preferred `completed_at`; the
+  trace component now does the same, with the ticking clock kept for live runs.
+- Contradicting evidence was in the paste all along: the six checkpoint timestamps span 15:07:18 →
+  15:08:33, seventy-five seconds. The arithmetic bug was the only thing that made the run look long.
+- The failure itself is real and is not yet explained, and this change does not claim to have explained
+  it. `AI_MISCONFIGURED` on a per-file row can only be a non-retryable 4xx whose reason tag was absent
+  or unrelated to width — 429/5xx and transport failures are classified `AI_UNAVAILABLE`, and context
+  refusals are `AI_CONTEXT_OVERFLOW`. Two consecutive refusals trip `_MAX_CONSECUTIVE_FAILURES`, which
+  is why the audit stopped at two files instead of walking the repository.
+- What settles it is one line the operator owns: `ai_provider_refused provider=groq status=<NNN>
+  reason=<TAG>` in the uvicorn console, logged at WARNING. The vendor's message body is deliberately
+  never stored, never returned to a client and never written to a scan row, so the database, the API
+  and this page cannot name the reason. Reading it requires that log.
+- Consistent candidates, none confirmed: a request-shape refusal (the hosted payload always sends
+  `response_format: {"type":"json_object"}`, `temperature: 0.1` and `max_tokens`) rejected for the model
+  behind `Vulnix Fast` — that fails every file identically, which is what the trace shows; a credential
+  refusal, since 401/403 land in the same bucket as a bad request; or a content filter, made likelier by
+  the first file being `.env`, which `intake.is_candidate` deliberately treats as reviewable source. The
+  retry count of 1 is that file's first attempt having failed retryably before the refusal arrived.
+- Nothing was run against a live reviewer. A re-test spends the operator's hosted quota and writes an
+  `AiUsageEvent`, so it waits for their go-ahead. The local Postgres container was unreachable
+  (`docker ps` could not connect), so no read-only query of the scan row or usage events was possible.
+- Verified: `npx eslint` clean on `components/app/ScanProgressTrace.jsx` and `pages/AuditRunDetail.jsx`,
+  `npm run build` succeeded. No backend file changed. The corrected figure on a real finished run is not
+  observed — `/app/**` needs a session this agent does not have.
+
+## Verification log (2026-10-27, credential isolation in the catalog suite)
+
+- Full backend suite re-run after the ADR-021 fixture fix: **363 passed, 1 warning in 666.27s**. The one
+  warning is the pre-existing Starlette `testclient` deprecation notice, not a project finding.
+- The thirteen failures that preceded it were a test-isolation bug, not a product bug: `Settings` reads
+  `backend/.env` from the working directory, so configuring a real OpenRouter key made `_probe_openrouter()`
+  run during unit tests whose fixture had never blanked that credential. The stubbed transport raised on the
+  unlisted URL, which also confirms no request reached a vendor from a unit test.
+- `ruff check` clean on `tests/unit/test_ai_catalog.py` and `app/ai/catalog.py`.
+- Caution for the owner, recorded without the value: a pytest traceback echoed the request headers, so the
+  live OpenRouter bearer token appeared in that console output and in this session's log. It is not in any
+  tracked file, in `.env.example`, or in the commit described here.

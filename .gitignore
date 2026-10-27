@@ -51,3 +51,4 @@ coverage/
 !.vscode/extensions.json
 .DS_Store
 Thumbs.db
+.devswarm-temp/

@@ -81,8 +81,10 @@ const COMPONENT_MAP = [
   { key: 'database',     label: 'Database',           Icon: Database,  description: 'PostgreSQL persistence layer' },
   { key: 'supabase_auth',label: 'Auth Provider',      Icon: Shield,    description: 'Supabase authentication gateway' },
   { key: 'ai',           label: 'AI Review Engine',   Icon: Cpu,       description: 'Primary LLM reviewer' },
-  { key: 'ai_fallback',  label: 'AI Fallback',        Icon: Zap,       description: 'Secondary reviewer for resilience' },
-  { key: 'ai_groq',      label: 'Vulnix AI engine',   Icon: Activity,  description: 'AI provider configured for reviews' },
+  { key: 'ai_fallback',  label: 'AI Fallback',        Icon: Zap,       description: 'Reviewer handover when the primary is down' },
+  { key: 'ai_hosted_primary',   label: 'Hosted reviewer',      Icon: Activity, description: 'First hosted review engine, credential present or not' },
+  { key: 'ai_hosted_secondary', label: 'Hosted reviewer alt',  Icon: Activity, description: 'Second hosted engine that takes over an audit' },
+  { key: 'ai_hosted_tertiary',  label: 'Hosted reviewer reserve', Icon: Activity, description: 'Last engine in the chain, for narrow files' },
   { key: 'integrations', label: 'Integrations',       Icon: Plug,      description: 'GitHub, Slack, Jira webhooks' },
 ]
 
@@ -276,7 +278,9 @@ export function SystemStatus() {
         supabase_auth: ready.supabase_auth,
         ai:           ready.ai,
         ai_fallback:  ready.ai_fallback,
-        ai_groq:      ready.ai_groq,
+        ai_hosted_primary: ready.ai_hosted_primary,
+        ai_hosted_secondary: ready.ai_hosted_secondary,
+        ai_hosted_tertiary: ready.ai_hosted_tertiary,
         integrations: ready.integrations,
       }
     : {}

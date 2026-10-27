@@ -109,7 +109,13 @@ class Settings(BaseSettings):
     # AI
     ai_enabled: bool = False
     # The provider used when a workspace has not chosen a model of its own.
-    ai_provider: Literal["ollama", "groq", "none"] = "ollama"
+    ai_provider: Literal["ollama", "groq", "gemini", "openrouter", "none"] = "groq"
+    # Inference on the Vulnix host is not offered as a reviewer: it is not part of
+    # the hosted product, and a picker that lists a model the host has not pulled
+    # invites a workspace to choose a reviewer that then cannot answer. The local
+    # adapter and its settings below stay intact, so a deployment that runs its own
+    # model can offer it again with this one setting (ADR-017).
+    ai_local_enabled: bool = False
     ai_base_url: str = "http://localhost:11434"
     ai_model: str = ""
     ai_api_key: str = ""
@@ -136,14 +142,51 @@ class Settings(BaseSettings):
     ai_retry_backoff_base_seconds: float = 1.0
     ai_retry_backoff_max_seconds: float = 10.0
 
-    # Groq: used as a primary provider (ai_provider = "groq") or as the
-    # failover target when the local model does not answer.
+    # Bound what a hosted reviewer can answer with. An open-ended completion on
+    # a long file is the one place an audit can spend output tokens without
+    # limit, and a reply that only just fits is what truncation checks guard.
+    # Zero leaves the provider's own default in place.
+    ai_max_output_tokens: int = 2048
+    # A reviewer that just failed is skipped for this long. Without it, the
+    # retry loop above knocks on the dead provider on every attempt before the
+    # surviving one is ever reached, doubling the cost of an outage.
+    # Zero means every attempt tries the primary again first.
+    ai_provider_cooldown_seconds: int = 60
+
+    # Failover: the reviewer an audit hands over to when the primary does not
+    # answer. Any hosted provider can be primary or target, and a target is
+    # never the provider that just failed. The named target is tried first; the
+    # remaining configured reviewers follow it in catalog order.
     ai_fallback_enabled: bool = False
-    ai_fallback_provider: Literal["groq", "none"] = "groq"
+    ai_fallback_provider: Literal["groq", "gemini", "openrouter", "none"] = "groq"
     ai_fallback_base_url: str = "https://api.groq.com/openai/v1"
     ai_fallback_model: str = "qwen/qwen3.8-27b"
     ai_fallback_api_key: str = ""
     ai_fallback_timeout_seconds: int = 30
+    # The window a handed-over prompt must still fit inside. Groq's chat models
+    # are the smallest of the three, so this is the one that governs a handover
+    # onto them.
+    ai_fallback_context_tokens: int = 131072
+
+    # Google AI Studio. Speaks the OpenAI-compatible chat API, so a review can
+    # continue here when the primary hosted reviewer is throttling or down.
+    # Its credential is deliberately separate: a Groq key must never be sent to
+    # a Google endpoint by a copied variable.
+    ai_gemini_api_key: str = ""
+    ai_gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    ai_gemini_model: str = "gemini-2.5-flash"
+    ai_gemini_timeout_seconds: int = 45
+    ai_gemini_context_tokens: int = 1000000
+
+    # OpenRouter is the narrowest window in the chain - the 32k coder model from
+    # the free tier - so it is the reviewer that must be refused before the
+    # request rather than after. Its credential is separate for the same reason
+    # as Gemini's: a key never travels to an endpoint the operator did not name.
+    ai_openrouter_api_key: str = ""
+    ai_openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    ai_openrouter_model: str = "qwen/qwen2.5-coder-32b-instruct:free"
+    ai_openrouter_timeout_seconds: int = 30
+    ai_openrouter_context_tokens: int = 32768
 
     # Review agent - the scan's primary reader. The CLI scanners above are
     # optional inputs to it and never decide whether a scan succeeds.
@@ -228,6 +271,49 @@ class Settings(BaseSettings):
     @property
     def groq_ready(self) -> bool:
         return bool(self.groq_api_key and self.groq_base_url)
+
+    @property
+    def gemini_api_key(self) -> str:
+        """The Google AI Studio credential, and only that.
+
+        It has no fallback to another provider's variable: a key must never be
+        sent to an endpoint the operator did not put it on.
+        """
+        return self.ai_gemini_api_key
+
+    @property
+    def gemini_base_url(self) -> str:
+        return self.ai_gemini_base_url
+
+    @property
+    def gemini_ready(self) -> bool:
+        return bool(self.gemini_api_key and self.gemini_base_url)
+
+    @property
+    def openrouter_api_key(self) -> str:
+        """The OpenRouter credential, and only that. Same rule as Gemini's."""
+        return self.ai_openrouter_api_key
+
+    @property
+    def openrouter_base_url(self) -> str:
+        return self.ai_openrouter_base_url
+
+    @property
+    def openrouter_ready(self) -> bool:
+        return bool(self.openrouter_api_key and self.openrouter_base_url)
+
+    @property
+    def hosted_reviewers(self) -> tuple[str, ...]:
+        """Configured hosted reviewers, in the order an audit may hand over."""
+        return tuple(
+            name
+            for name, ready in (
+                ("groq", self.groq_ready),
+                ("gemini", self.gemini_ready),
+                ("openrouter", self.openrouter_ready),
+            )
+            if ready
+        )
 
 
 @lru_cache

@@ -29,7 +29,7 @@
 
 ### Health
 - `GET /health` — liveness check; no sensitive operational detail.
-- `GET /ready` — readiness check for required dependencies. Reports each component as `enabled` or `disabled`; `integrations` reflects whether outbound delivery is switched on and able to store credentials. `ai` reflects the local provider, `ai_fallback` whether failover is armed, and `ai_groq` only the *presence* of a Groq credential — which models that credential can reach is decided per request by the catalog, never asserted here.
+- `GET /ready` — readiness check for required dependencies. Reports each component as a string: `enabled`/`disabled`, `up`/`down` or `configured`/`not_configured`. `integrations` reflects whether outbound delivery is switched on and able to store credentials. `ai` reflects the primary reviewer, `ai_fallback` whether handover is armed — on only when a *second* hosted reviewer actually has a credential. `ai_hosted_primary`, `_secondary` and `_tertiary` report credential presence by chain rank, never by provider name; which models a credential can reach is decided per request by the catalog, never asserted here.
 
 ### Auth and account
 - `GET /auth/me` — the verified identity: id, email, display name, creation date, and the workspaces this user belongs to with their role. Roles are read from membership rows, never from a client claim.
@@ -78,6 +78,18 @@
   ```json
   {"id":"uuid","status":"queued","created_at":"2026-10-18T18:00:00Z"}
   ```
+  `options` may be omitted. `agent_review` defaults to `true`; `static_analysis`, `secrets` and
+  `dependencies` default to `false` (ADR-014), so the body above is how a caller opts into the CLI
+  passes and a scan with no `options` at all runs the agent alone and starts no subprocess.
+  Roll-up: an agent that succeeded with an optional tool failing is `completed_with_errors`; an agent
+  that produced nothing with no tool that worked is `failed` carrying the agent's own code
+  (`AI_DISABLED`, `NO_SOURCE`, `TIMEOUT`, quota or provider codes). An audit with `agent_review:false`
+  and no CLI category is `failed NO_ANALYSIS_REQUESTED`; with a category requested but no usable tool
+  on this host it is `failed ALL_SCANNERS_FAILED`. A scan whose worker crashed — including a crash
+  caused by the database connection dying mid-review — is `failed INTERNAL_ERROR` with
+  `completed_at` set: the row was committed before the work began, so a crash is a result the API
+  reports rather than a `500` on the request that queued it, and no scan is left `running` after its
+  worker stopped (ADR-016).
 - `GET /projects/{project_id}/scans?limit=20&cursor=...`
 - `GET /scans/{scan_id}` — status, summary, tool-run status.
   - `summary.agent` describes the agent-first review. Alongside file, finding, call, retry and suggestion
@@ -111,9 +123,8 @@
   {
     "finding_id":"uuid",
     "generated_by":"ai",
-    "provider":"groq",
-    "model":"qwen/qwen3.8-27b",
-    "model_id":"ollama:qwen3.5:4b",
+    "reviewer":"Vulnix Pro",
+    "fallback":false,
     "generated_at":"2026-10-22T10:56:49Z",
     "summary":"Potential unsafe query construction.",
     "impact":"An attacker may influence query behavior if the input is untrusted.",
@@ -124,40 +135,37 @@
     "evidence_refs":["svc/client.py:12"]
   }
   ```
-  `model` and `provider` name the model that actually replied; `model_id` is the catalog entry that was asked for. When a local primary falls through to a hosted one these disagree, and clients must present the answering pair as the fact.
+  `reviewer` names the reviewer that actually replied, under its Vulnix alias, and `fallback` says whether that was the one the workspace asked for. Which vendor and model answered, and the catalog entry that was asked for, stay on the server row: a reply reached through a handover must not be presented as the requested one.
 
 ### AI
-Model names are never taken from a client. The catalog is built by asking each configured provider what it can serve right now, so a caller may only choose an entry id that this endpoint returned. Reads require `viewer`; selecting a model requires `member`; the workspace-wide usage view requires `admin`.
+Model names are never taken from a client. The catalog is built by asking each configured provider what it can serve right now, so a caller may only choose an entry that this endpoint returned — and what it returns is an opaque selection token plus a Vulnix alias, never a vendor or model name. Reads require `viewer`; selecting a model requires `member`; the workspace-wide usage view requires `admin`.
 
 - `GET /workspaces/{workspace_id}/ai/models` — selectable entries, cheapest source first.
   ```json
   [
     {
-      "id": "ollama:qwen3.5:4b",
-      "provider": "ollama",
-      "model": "qwen3.5:4b",
-      "label": "Qwen 3.5 4B (local)",
-      "note": "Runs on the Vulnix host. Nothing leaves the machine.",
-      "source": "local"
+      "id": "mdl_6f2c1a9b4d8e7c30",
+      "alias": "Vulnix Pro",
+      "note": "Balanced reviewer. Follows the finding schema most reliably."
     }
   ]
   ```
-  An empty list means no provider answered, not that AI is disabled — the response never asserts a model that was not reported.
+  An empty list means no reviewer answered, not that AI is disabled — the response never asserts a model that was not reported. A deployment that runs its own model (`VULNIX_AI_LOCAL_ENABLED=true`, ADR-017) lists it first, under its own alias; nothing local is offered until that is set, so a workspace can never choose a reviewer the host has not pulled.
 - `GET /workspaces/{workspace_id}/ai/settings` — selection plus the caller's quota state.
   ```json
   {
     "enabled": true,
-    "selected": "groq:qwen/qwen3.8-27b",
-    "default": "ollama:qwen3.5:4b",
+    "selected": "mdl_6f2c1a9b4d8e7c30",
+    "default": "mdl_6f2c1a9b4d8e7c30",
     "models": [],
     "daily_quota": 100,
     "used_today": 5
   }
   ```
-  `selected` falls back to `default` when a stored preference stops being offered (a model un-pulled locally, or a key that no longer reaches it).
+  `selected` falls back to `default` when a stored preference stops being offered (a hosted account that lost access, or a reviewer this deployment no longer lists).
 - `PUT /workspaces/{workspace_id}/ai/settings`
   ```json
-  {"model_id": "groq:qwen/qwen3.8-27b"}
+  {"model_id": "mdl_6f2c1a9b4d8e7c30"}
   ```
   Returns the same body as `GET`. A bare model name, an unknown provider, or an id outside the current catalog is refused with `AI_MODEL_UNAVAILABLE` (422); the id is re-validated on every call, not only on write. Selecting a model writes an audit event carrying provider and model identity only.
 - `GET /workspaces/{workspace_id}/ai/usage?days=365&scope=user|workspace` — the credit history.
@@ -303,9 +311,13 @@ Delivery failures are stored on the delivery row in `last_error_code` rather tha
 `TARGET_BLOCKED` (address resolved to an internal range), `TARGET_UNREACHABLE`, `TARGET_TIMEOUT`, `REDIRECT_REFUSED`, `PAYLOAD_TOO_LARGE`, `DECRYPT_FAILED`, `CONFIG_INCOMPLETE`, `TARGET_MISSING`, `HTTP_<status>`, `TARGET_SERVER_ERROR`, and provider-derived codes such as `SLACK_CHANNEL_NOT_FOUND` (sanitized from the untrusted provider response). Retried codes: `TARGET_SERVER_ERROR`, `TARGET_UNREACHABLE`, `TARGET_TIMEOUT`, `SLACK_RATE_LIMITED`. Everything else is terminal and parks the delivery as a dead letter.
 
 ## AI error codes
-`AI_DISABLED` (503, no provider reachable or AI switched off), `AI_MODEL_UNAVAILABLE` (422, an entry id outside the live catalog), `AI_UNAVAILABLE` (503, transport failure — the provider's own error text is never passed through), `AI_MISCONFIGURED` (503, a required base URL or credential is missing), `AI_INVALID_OUTPUT` (502, the reply was not parseable, not an object, failed schema validation, or referenced a different finding), `QUOTA_EXCEEDED` (429, per-minute limit or daily credit quota).
+`AI_DISABLED` (503, no provider reachable or AI switched off), `AI_MODEL_UNAVAILABLE` (422, an entry id outside the live catalog), `AI_UNAVAILABLE` (503, transport failure — the provider's own error text is never passed through), `AI_MISCONFIGURED` (503, a required base URL or credential is missing; 502, a reviewer refused the request for a reason that is not about its width), `AI_INVALID_OUTPUT` (502, the reply was not parseable, not an object, failed schema validation, or referenced a different finding), `AI_OUTPUT_TRUNCATED` (502, the reply reached the configured output cap, so it is reported rather than re-asked of another reviewer), `AI_CONTEXT_OVERFLOW` (413, the prompt is wider than that reviewer's context window — either refused before the request is sent, so nothing is billed, or read from the refusing reviewer's own machine-readable reason code), `QUOTA_EXCEEDED` (429, per-minute limit or daily credit quota).
 
-Only `AI_UNAVAILABLE` and `AI_MISCONFIGURED` can trigger a hosted failover. A malformed or schema-invalid reply is a model-quality problem and is reported as such rather than silently retried against another provider.
+`AI_UNAVAILABLE`, `AI_MISCONFIGURED` and `AI_CONTEXT_OVERFLOW` can trigger a handover to the next reviewer in the chain — the first two because that reviewer is not answering, the last because it may not have the room for this file but a wider one does. A malformed, schema-invalid or truncated reply is a model-quality problem and is reported as such rather than silently retried against another provider.
+
+Two of those codes park a reviewer for `ai_provider_cooldown_seconds` and one does not, because they mean different things. An outage or a refusal is the reviewer's, so the chain steps past it for a minute rather than paying its timeout per file. Running out of window is the *file's*: a reviewer that declined one long file is still the best candidate for the short ones, so `AI_CONTEXT_OVERFLOW` moves to the next link without benching the one that answered. A refusal is distinguished from an outage only by the vendor's own short reason code (`error.code`, `error.type` or `error.status`, matched against a bounded token), never by its message, which is discarded — a refusal often quotes the prompt back, and the prompt contains somebody's source. See ADR-015 and ADR-016.
+
+A handover also never invents a model name. A takeover link asks that provider what the credential can actually serve; if it reports nothing, the link is skipped without an HTTP request and without a cooldown, and the audit reports the failure of the reviewer it chose.
 
 ## Security requirements
 

@@ -52,13 +52,21 @@ def ready() -> dict[str, str]:
         components["redis"] = "down"
 
     supabase_ok = bool(settings.supabase_url and settings.supabase_anon_key)
-    fallback_ok = bool(settings.ai_fallback_enabled and settings.ai_fallback_api_key)
     components["supabase_auth"] = "configured" if supabase_ok else "not_configured"
     components["ai"] = "enabled" if settings.ai_enabled else "disabled"
-    components["ai_fallback"] = "enabled" if fallback_ok else "disabled"
-    # Presence of a Groq credential only - which models it can reach is probed
-    # per request by the catalog, never asserted here.
-    components["ai_groq"] = "configured" if settings.groq_ready else "not_configured"
+    # Credential presence for each hosted reviewer slot, named by rank so no
+    # provider identity leaves this process. Which models each can reach is
+    # probed per request by the catalog, never asserted here.
+    components["ai_hosted_primary"] = "configured" if settings.groq_ready else "not_configured"
+    components["ai_hosted_secondary"] = "configured" if settings.gemini_ready else "not_configured"
+    components["ai_hosted_tertiary"] = (
+        "configured" if settings.openrouter_ready else "not_configured"
+    )
+    # Handover is only resilience if there is somewhere to hand over to.
+    components["ai_fallback"] = (
+        "enabled" if settings.ai_fallback_enabled and len(settings.hosted_reviewers) > 1
+        else "disabled"
+    )
     # Names and on/off only: which integrations are configured is workspace data.
     components["integrations"] = "enabled" if settings.integrations_ready else "disabled"
 

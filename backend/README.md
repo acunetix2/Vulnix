@@ -56,15 +56,20 @@ environment. Submitted project code is never executed.
 
 ### AI explanations
 
-Disabled by default. For agentic source reviews, set `VULNIX_AI_ENABLED=true`,
-point `VULNIX_AI_BASE_URL` at an Ollama server, and set `VULNIX_AI_MODEL`.
-Audits request agent review by default; if the reviewer is unavailable or only
+Disabled by default. For agentic source reviews, set `VULNIX_AI_ENABLED=true`
+and give at least one hosted reviewer a credential (`VULNIX_AI_GROQ_API_KEY`,
+`VULNIX_AI_GEMINI_API_KEY` or `VULNIX_AI_OPENROUTER_API_KEY`); the model a
+workspace may pick is whatever that account actually reports, so a name is never
+typed into a client. Running inference on this machine is opt-in: set
+`VULNIX_AI_LOCAL_ENABLED=true` and point `VULNIX_AI_BASE_URL` at an Ollama
+server. Audits request agent review by default; if the reviewer is unavailable or only
 part of the source can be reviewed, successful CLI checks are retained but the
 audit is marked `completed_with_errors` rather than being presented as complete.
 The agent reviews every eligible file by default, can read related files and
 search the repository to verify findings, and uses the whole-scan timeout and
-daily AI quota as its safety bounds. Set `VULNIX_AI_DISABLE_THINK=true` only
-when faster local-model responses are more important than deeper reasoning.
+daily AI quota as its safety bounds. `VULNIX_AI_NUM_CTX` and
+`VULNIX_AI_DISABLE_THINK` belong to the local adapter and matter only when that
+opt-in is on.
 Snippets are redacted before model calls, findings are checked against the
 source archive, and repository code is never executed.
 

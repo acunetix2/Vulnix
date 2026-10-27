@@ -33,15 +33,17 @@ logger = logging.getLogger("vulnix.agent.code")
 # ---------------------------------------------------------------------------
 
 # Maps severity tier to the alias that should be preferred.  If the alias is
-# not currently available (model not pulled / account does not have it) the
+# not currently available (the account does not offer that reviewer) the
 # catalog falls back to whatever is reachable, so this is a preference not a
-# hard requirement.
+# hard requirement.  The info tier asks for the shallowest reviewer rather than
+# a local one: local inference is opt-in, so an alias that only a self-hosted
+# deployment can offer would leave low-priority findings unrouted (ADR-017).
 _SEVERITY_ALIAS_PREFERENCE: dict[str, str] = {
-    "critical": "Vulnix Ultra",   # gpt-oss-120b  — deepest analysis
+    "critical": "Vulnix Ultra",
     "high":     "Vulnix Ultra",
-    "medium":   "Vulnix Pro",     # qwen3.8-27b   — balanced
-    "low":      "Vulnix Fast",    # gpt-oss-20b   — quickest
-    "info":     "Vulnix Edge",    # local Ollama  — minimal overhead
+    "medium":   "Vulnix Pro",
+    "low":      "Vulnix Fast",
+    "info":     "Vulnix Sprint",
 }
 
 

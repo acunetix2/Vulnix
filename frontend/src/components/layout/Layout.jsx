@@ -62,7 +62,7 @@ export function Layout() {
         </div>
       </main>
       <div className="lg:pl-16">
-        <VulnixFooter />
+        <VulnixFooter banner />
       </div>
       <FloatingHelp />
       {needsOnboarding && <Onboarding me={user} />}

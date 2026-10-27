@@ -145,12 +145,9 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["health"], summary="Liveness probe")
     def health() -> dict:
-        try:
-            from app.agent.router import get_swarm_status
-            swarm = get_swarm_status()
-        except Exception:
-            swarm = {"status": "error"}
-        return {"status": "ok", "agentic_architecture": swarm}
+        # Liveness only. The agent registry and per-component status belong to
+        # /api/v1/ready, which checks its own dependencies.
+        return {"status": "ok"}
 
     return app
 

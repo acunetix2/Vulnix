@@ -1,5 +1,6 @@
 @import '@fontsource-variable/geist';
 @import '@fontsource-variable/geist-mono';
+@import '@fontsource-variable/space-grotesk';
 @import 'tailwindcss';
 
 /* Gate `dark:` variants behind the persisted app theme, not the OS setting. */
@@ -153,8 +154,16 @@
 }
 
 @theme {
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: 'Space Grotesk Variable', 'Geist Mono Variable', ui-monospace, monospace;
   --font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --font-weight-light: 300;
+  --font-weight-normal: 400;
+  --font-weight-medium: 450;
+  --font-weight-semibold: 500;
+  --font-weight-bold: 550;
+  --font-weight-extrabold: 600;
+  --font-weight-black: 600;
 
   /* Severity ramp stays constant across themes — it carries meaning, not mood. */
   --color-severity-critical: #dc2626;
@@ -218,6 +227,16 @@
     background-color: var(--canvas);
     color: var(--foreground);
     font-size: 16px;
+    font-weight: 400;
+    letter-spacing: -0.008em;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 500;
+    letter-spacing: -0.025em;
   }
 
   code,
@@ -301,6 +320,133 @@
 
 .rail-scroll:hover::-webkit-scrollbar-thumb:hover {
   background: rgba(148, 163, 184, 0.55);
+}
+
+/* The audit run console is one deliberate operations surface, so it carries its
+   own emerald palette instead of the generic card grid. That palette has to
+   switch with the app theme the way every other token does: the light values are
+   the base and `.dark` replaces them. Declaring only the dark set pinned the page
+   to black whatever the theme control said, and left every `dark:` utility inside
+   it resolving against the wrong background. */
+.audit-ops {
+  color-scheme: light;
+
+  --canvas: #e8f0eb;
+  --background: #f7faf8;
+  --foreground: #10201a;
+  --card: #ffffff;
+  --card-foreground: #10201a;
+  --popover: #ffffff;
+  --popover-foreground: #10201a;
+
+  --primary: #047857;
+  --primary-foreground: #ffffff;
+  --primary-hover: #065f46;
+  --primary-subtle: #d6f0e2;
+
+  /* One accent on this surface, and it is the action colour. */
+  --brand: #047857;
+  --brand-foreground: #ffffff;
+  --brand-subtle: #d6f0e2;
+
+  --secondary: #dce8e1;
+  --secondary-foreground: #0f1f19;
+  --muted: #e4eee8;
+  --muted-foreground: #4e6a5d;
+  --accent: #d5e6dc;
+  --accent-foreground: #0f1f19;
+
+  --destructive: #b42318;
+  --destructive-foreground: #ffffff;
+  --destructive-subtle: #fae7e4;
+
+  --border: #c6dcd0;
+  --border-strong: #9cbbaa;
+  --input: #dcebe2;
+  --ring: #047857;
+
+  --ai: #047857;
+  --ai-subtle: #d6f0e2;
+
+  /* The glow, the grid and the drop shadow are decoration, and each belongs to
+     the palette it sits on, so they change with it rather than being fixed. */
+  --ops-glow: rgba(4, 120, 87, 0.10);
+  --ops-grid: rgba(4, 120, 87, 0.07);
+  --ops-shadow: rgba(16, 44, 32, 0.10);
+
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background:
+    radial-gradient(circle at 12% 0%, var(--ops-glow), transparent 28rem),
+    var(--canvas);
+  color: var(--foreground);
+  box-shadow: 0 18px 60px var(--ops-shadow);
+}
+
+.dark .audit-ops {
+  color-scheme: dark;
+
+  --canvas: #070c0a;
+  --background: #090f0c;
+  --foreground: #e7f0eb;
+  --card: #0d1511;
+  --card-foreground: #e7f0eb;
+  --popover: #111b16;
+  --popover-foreground: #e7f0eb;
+
+  --primary: #41e69a;
+  --primary-foreground: #07150e;
+  --primary-hover: #74f0b5;
+  --primary-subtle: #102d20;
+
+  --brand: #41e69a;
+  --brand-foreground: #07150e;
+  --brand-subtle: #102d20;
+
+  --secondary: #17221c;
+  --secondary-foreground: #e7f0eb;
+  --muted: #131d17;
+  --muted-foreground: #8fa398;
+  --accent: #1b2921;
+  --accent-foreground: #e7f0eb;
+
+  --destructive: #fb7185;
+  --destructive-foreground: #240b11;
+  --destructive-subtle: #32161c;
+
+  --border: #22352a;
+  --border-strong: #395142;
+  --input: #30473a;
+  --ring: #41e69a;
+
+  --ai: #41e69a;
+  --ai-subtle: #102d20;
+
+  --ops-glow: rgba(65, 230, 154, 0.055);
+  --ops-grid: rgba(65, 230, 154, 0.025);
+  --ops-shadow: rgba(0, 0, 0, 0.16);
+}
+
+.audit-command {
+  background-image:
+    linear-gradient(var(--ops-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ops-grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.audit-terminal {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  overscroll-behavior: contain;
+}
+
+.audit-terminal::-webkit-scrollbar {
+  width: 5px;
+}
+
+.audit-terminal::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 9999px;
 }
 
 /* ------------------------------------------------------------ console motion */

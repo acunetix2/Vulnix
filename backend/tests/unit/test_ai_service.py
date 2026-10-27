@@ -248,6 +248,31 @@ def test_stale_workspace_selection_falls_back_to_default(seeded_finding, monkeyp
     assert result.summary
 
 
+def test_a_workspace_that_had_chosen_the_local_reviewer_keeps_working(
+    seeded_finding, monkeypatch
+) -> None:
+    """Withdrawing local inference must not strand the workspaces that picked it.
+
+    Their stored choice simply stops being offered, so the server default answers -
+    the same fall-through a deleted model already gets, arriving from the other end.
+    """
+    local = catalog.ModelEntry(
+        id="ollama:qwen3.5:4b", provider="ollama", model="qwen3.5:4b", note="", source="local"
+    )
+    db, finding, project = seeded_finding
+    stub = _stub(monkeypatch, {**VALID_RESPONSE, "finding_id": finding.id})
+    db.add(
+        WorkspaceAiSetting(
+            workspace_id=project.workspace_id, model_id=local.id, updated_by="user-1"
+        )
+    )
+    db.commit()
+
+    explain_finding(db, finding, "user-1", workspace_id=project.workspace_id)
+    assert finding.ai_explanation["model_id"] == STUB_ENTRY.id
+    assert stub.calls == 1
+
+
 def test_empty_catalog_reports_ai_disabled(seeded_finding, monkeypatch) -> None:
     db, finding, _ = seeded_finding
     monkeypatch.setattr(catalog, "list_models", lambda refresh=False: [])
