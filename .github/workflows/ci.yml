@@ -1,0 +1,111 @@
+# Both jobs run on every push to every branch and on every pull request.
+#
+# Neither needs a repository secret. The backend suite pins its own environment in
+# `backend/tests/conftest.py` before the app is imported, so it is hermetic whether or
+# not the runner has an env file - which is why there is no `.env` step here. The
+# frontend build runs with `VITE_API_BASE_URL` unset and falls back to `/api/v1` in
+# `src/lib/constants.js`, so a CI bundle never carries a hostname.
+#
+# Versions match what the code is known to run on, not what is newest: Python 3.14 is
+# the interpreter behind the passing suite and the one `render.yaml` pins, Node 22 is
+# what `Requirements & Specs/DEPLOYMENT.md` recommends for Cloudflare Pages.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (ruff, pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      # The dev extra carries pytest and ruff. postgres is included because the
+      # local suite is green with psycopg present; s3 is deliberately not, because
+      # no test needs boto3 installed - the R2 client is exercised through a stub.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,postgres]"
+
+      # Rules are declared in `backend/pyproject.toml`, which excludes `migrations/`:
+      # the 16 findings Alembic's generated files produce are its own column and
+      # import-block shape, and nobody reformats a migration by hand. `--output-format=github`
+      # puts each remaining finding on the offending line in the Checks tab.
+      #
+      # Non-blocking on purpose, and not because lint is optional: 9 findings already
+      # exist in application code that this workflow does not touch, and a check that
+      # is red on every run teaches everyone to ignore red. A failed test or build
+      # stays the only thing that can go red here. Remove the next line once the
+      # backend's 9 findings in TASKS.md are gone, and no later.
+      - name: Lint
+        run: ruff check . --output-format=github
+        continue-on-error: true
+
+      # The suite is the real gate. It pins its own database to in-memory SQLite, its
+      # storage to a local temp root and its reviewer to disabled, so nothing here
+      # reaches Postgres, Redis, R2 or a hosted model, and no secret is needed.
+      - name: Tests
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend (eslint, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # From the lockfile, so a CI run cannot resolve a dependency set that no local
+      # machine ever had.
+      - name: Install
+        run: npm ci
+
+      # Non-blocking for the same reason as the backend lint: 39 errors and 2 warnings
+      # are already spread over 14 files, six of them `react-hooks/set-state-in-effect`
+      # and three `no-undef`, which are behaviour rather than formatting and cannot be
+      # swept in a commit that adds a workflow. Tracked in TASKS.md.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+      # There is no test runner in this project yet, so the build is the frontend's
+      # only functional check: it fails on a broken import, a bad JSX file or a
+      # missing token reference.
+      - name: Build
+        run: npm run build
+
+      # Pages reads `_redirects` and `_headers` from the output directory, not from
+      # `public/`, so the build copying them into `dist` is part of the deployable
+      # contract. If this step fails, a deep link would 404 in production.
+      - name: Check the Pages config shipped
+        run: test -f dist/_redirects && test -f dist/_headers

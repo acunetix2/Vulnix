@@ -9,7 +9,9 @@ Use `[ ]` for pending, `[/]` for in progress, and `[x]` only after verification.
 - [x] Add `.gitignore`, `.env.example`, formatter, linter, and test runner.
 - [ ] Write threat model and security review checklist. (AI_SECURITY.md covers AI/worker threats; platform-wide checklist pending)
 - [x] Create local development environment for PostgreSQL and Redis. (infrastructure/compose.yaml)
-- [ ] Establish CI for linting and unit tests.
+- [/] Establish CI for linting and unit tests. (`.github/workflows/ci.yml` runs pytest and the frontend
+      build on every push; both lint steps report findings but do not fail the run until the debt below is
+      paid — ADR-026)
 
 ## Phase 1 — API and persistence
 - [x] Implement database migrations for users/workspaces/memberships/projects/scans/findings/tool runs/audit events.
@@ -181,7 +183,8 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       `tests/unit/test_storage_s3.py` stubs the module so the assertions run without it installed. (ADR-023)
 - [x] Deploy the backend as a queue, not a request. `render.yaml` defines the API web service, a
       `--concurrency=1` worker, the beat process and a private Redis, with `/health` as the health check and
-      `alembic upgrade head` as the pre-deploy command. The beat schedule now lives in the Celery app because a
+      a commented `preDeployCommand: alembic upgrade head` (Render only runs it on a paid instance type, so
+      the Shell is the fallback the runbook describes). The beat schedule now lives in the Celery app because a
       delivery in backoff is only ever claimed by that sweep. `backend/requirements.txt` installs the project
       plus the Postgres and storage extras. (ADR-024)
 - [x] Deploy the console as a static SPA. `frontend/public/_redirects` carries the `/* /index.html 200` fallback
@@ -199,6 +202,38 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       by a content filter; the distinguishing status and reason tag exist and are logged, so surfacing the
       tag on the step would let an operator triage from the console. Needs a decision on how much of a
       vendor's machine-readable code belongs in a client surface that is otherwise alias-only.
+
+## Requested 2026-10-27 — continuous integration
+- [x] Run the suite and the build on every push. `.github/workflows/ci.yml` has a `backend` job (Python 3.14,
+      `pip install -e ".[dev,postgres]"`, ruff, pytest) and a `frontend` job (Node 22, `npm ci`, eslint,
+      `vite build`, plus an assertion that `_redirects` and `_headers` reached `dist`). It needs no repository
+      secret, because `tests/conftest.py` pins the environment the suite asserts on. `backend/pyproject.toml`
+      now excludes `migrations/` from ruff so the report describes authored code. First run not yet
+      observed. (ADR-026)
+- [ ] Make the backend `Lint` step blocking by clearing 9 ruff findings, 6 of them auto-fixable: 3 `F401`
+      (`app/agent/code_agent.py:26`, `app/agent/dep_agent.py:12`, `app/main.py:110`), 3 `E501`
+      (`app/agent/intel_agent.py:135`, `app/modules/auth/routes.py:600` and `:602`), 1 `UP035` and 1 `UP037`
+      (both `app/agent/router.py`), 1 `I001` (`app/modules/scans/routes.py:3`). Two cautions: the `F401` at
+      `app/main.py:110` is the deliberate `import app.agent` whose side effect registers the agent's tools, so
+      it needs a `# noqa: F401` rather than deletion, and removing an unused import can drop the only thing
+      that made a module execute — this needs a full pytest run after, not just a green ruff.
+- [ ] Make the frontend `Lint` step blocking by clearing 39 errors and 2 warnings across 14 files: 29
+      `no-unused-vars`, 6 `react-hooks/set-state-in-effect`, 3 `no-undef`, 1 `react-refresh/only-export-components`,
+      2 `react-hooks/exhaustive-deps`. The `no-undef` findings are the only ones that may be live bugs — an
+      undefined identifier is a `ReferenceError` at runtime, not a style complaint — and deserve their own read
+      before anything is renamed. Largest file: `src/pages/Landing.jsx` (16). Six of these are hook logic and
+      cannot be verified without a signed-in session.
+- [ ] Fail a CI run on a vulnerable dependency. GitHub reports 5 advisories against the default branch
+      (1 high, 2 moderate, 2 low) and the workflow does not look at them; this is also Phase 5's
+      "Run dependency, secret, and static-analysis scans on the platform itself". The gate needs a prior
+      decision about what a transitive advisory means for a build, because `semgrep`, `gitleaks`, `bandit`
+      and `npm audit` are exactly the tools Vulnix's own adapters wrap.
+- [ ] Give the frontend a test runner. There is none, so `vite build` is the only functional check that job
+      has, and it proves the bundle compiles rather than that a page behaves.
+- [ ] Rotate the GitHub App private key in `backend/.env`. On 2026-10-27 a shell command intended to list
+      only variable names printed the key body, because the value is a multi-line PEM whose inner lines
+      contain no `=`; nothing was committed and nothing left the machine, but the value is in that session's
+      transcript and should be treated as exposed. The file itself is gitignored and stays put.
 
 ## Working agreement
 Do not start the next phase merely because the previous phase's code exists. Confirm tests, acceptance criteria, security review, and documentation updates first.
