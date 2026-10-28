@@ -208,8 +208,12 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       `pip install -e ".[dev,postgres]"`, ruff, pytest) and a `frontend` job (Node 22, `npm ci`, eslint,
       `vite build`, plus an assertion that `_redirects` and `_headers` reached `dist`). It needs no repository
       secret, because `tests/conftest.py` pins the environment the suite asserts on. `backend/pyproject.toml`
-      now excludes `migrations/` from ruff so the report describes authored code. First run not yet
-      observed. (ADR-026)
+      now excludes `migrations/` from ruff so the report describes authored code. Observed on the first run:
+      both jobs completed success on Linux at `1c906c3`. (ADR-026)
+- [ ] Cover the two Linux-only paths CI still does not reach. `sandbox_env()`'s non-`nt` branch runs only when
+      a real CLI executable is invoked and no test invokes one; `test_inspect_rejects_symlinks` asserts the
+      archive is rejected at inspection, so its symlink entry is never created on any platform. Both need
+      tests that actually extract, or actually run an adapter against a stubbed executable.
 - [ ] Make the backend `Lint` step blocking by clearing 9 ruff findings, 6 of them auto-fixable: 3 `F401`
       (`app/agent/code_agent.py:26`, `app/agent/dep_agent.py:12`, `app/main.py:110`), 3 `E501`
       (`app/agent/intel_agent.py:135`, `app/modules/auth/routes.py:600` and `:602`), 1 `UP035` and 1 `UP037`
