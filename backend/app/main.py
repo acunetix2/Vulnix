@@ -141,7 +141,11 @@ def create_app() -> FastAPI:
             allow_origins=settings.cors_origins,
             allow_credentials=False,
             allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-            allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+            # Every header the console actually sends. Starlette answers a preflight
+            # that asks for anything else with a 400 before routing, so a missing
+            # entry here looks like a broken endpoint rather than a CORS setting.
+            # `Idempotency-Key` is the one an audit POST carries.
+            allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Idempotency-Key"],
             expose_headers=["X-Request-ID"],
             max_age=600,
         )
