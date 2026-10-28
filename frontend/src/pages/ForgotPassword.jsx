@@ -6,8 +6,7 @@ import { BackgroundBoxesDemo } from '../components/app/BackgroundBoxesDemo'
 import { FloatingHelp } from '../components/app/FloatingHelp'
 import { VulnixFooter } from '../components/app/VulnixFooter'
 import { VulnixLegalGraphicBanner } from './landing/legal/VulnixLegalGraphicBanner'
-
-const API_BASE = '/api/v1'
+import { API_BASE_URL } from '../lib/constants'
 
 export function ForgotPassword() {
   const [email, setEmail] = useState('')
@@ -21,7 +20,7 @@ export function ForgotPassword() {
     setError(null)
 
     try {
-      const response = await fetch(`${API_BASE}/auth/forgot-password`, {
+      const response = await fetch(`${API_BASE_URL}/auth/forgot-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),

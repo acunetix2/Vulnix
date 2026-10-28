@@ -320,6 +320,55 @@ Record material decisions here. Do not silently change a decision that affects d
 - **Consequences:** the first run executed on Linux and both jobs passed (Backend `ruff, pytest` and Frontend `eslint, build`, run 40650579036 at `1c906c3`), so the suite is not Windows-only and the fresh dependency resolve installs. What it did *not* do is prove the two Linux-specific paths named above: `sandbox_env()` runs only when a real CLI executable is invoked, which no test does, and `test_inspect_rejects_symlinks` asserts the archive is rejected at inspection, so the symlink entry is never created on either platform. Covering those is a test-writing task, not a CI one. Every push now costs about ten minutes of pytest (633 s locally) plus an install and a build; that is the price of the gate, and it is what makes `timeout-minutes: 30` a real bound rather than decoration. Two yellow lint annotations sit on every run until the recorded debt is paid, which is the visible cost of choosing signal over a clean board.
 - **Date / owner:** 2026-10-27 / nothing has ever tested this stack except one laptop.
 
+## ADR-027 — One place decides where a client request goes; no page re-declares the API base
+
+- **Status:** Accepted
+- **Context:** The console on Cloudflare Pages and the API on Render are different origins, so every request
+  it makes is cross-origin (ADR-022, ADR-025). `src/lib/constants.js` already carries the single answer to
+  "where is the API" - `API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'`, absolute in a
+  deployment and relative so the Vite dev proxy still works - and `src/services/api.js` uses it. Four auth
+  pages did not: `SignIn.jsx`, `SignUp.jsx`, `AuthCallback.jsx` and `ForgotPassword.jsx` each opened with a
+  local `const API_BASE = '/api/v1'` and called `fetch()` with it. On Pages that resolves to the console's
+  own origin, where `/api/v1/...` is not a file, and a POST to a static asset is answered 405 by Cloudflare
+  before the SPA fallback is consulted. The operator's symptom was precisely the split this predicts: email
+  sign-in reached the API because it goes through `api.login()`, and the GitHub and Google buttons did not
+  because they call `oauth/init` themselves. The absolute hostname was correctly baked into the shipped
+  bundle the whole time - a grep of the live `index-*.js` found it once, in `constants.js` - which is why the
+  deploy looked configured and still failed.
+- **Decision:**
+  1. Delete all four local declarations and import `API_BASE_URL` from `../lib/constants` in each page. The
+     call sites now read `${API_BASE_URL}/auth/...`, so the build-time variable is the only thing that can
+     point a request at the wrong host, and it points them all or none.
+  2. `redirect_uri` stays `${window.location.origin}/auth/callback`. That value belongs to the console, not
+     the API: Supabase must return the browser to the SPA route that exchanges the code. Making it absolute
+     from a second variable would reintroduce exactly the class of bug this ADR removes.
+  3. No compatibility shim, no alias import (`API_BASE_URL as API_BASE`). Two names for one value is how
+     they drifted apart in the first place; the diff is four files and seven call sites.
+- **Alternatives considered:** keeping the relative URL and adding a Pages rewrite or Function that proxies
+  `/api/*` to Render (removes the CORS dependency and keeps everything same-site, but puts every API call
+  behind a second network hop, costs a Worker invocation per request, and means the API origin lives in two
+  places again - Pages config plus the backend); fixing only `SignIn.jsx` because that is the page the
+  operator reported (the same latent 405 sat on the callback and password-reset paths, and the callback page
+  is the one that consumes the OAuth code); setting `VITE_API_BASE_URL=/api/v1` on Pages and re-pointing the
+  host in `_headers` (Pages cannot rewrite a request's origin from a header file - this is not a thing the
+  feature does).
+- **Security implications:** routing these calls at the API makes the ADR-022 allowlist a hard prerequisite
+  rather than an optional setting, and `VULNIX_CORS_ALLOW_ORIGINS` was still empty when this was written, so
+  the browser will now refuse them with a different error. Nothing new is disclosed by the change: the
+  `Origin` header was already the console's own, the PKCE code arrives on the console origin's query string
+  and is POSTed to the API over TLS, and no credential goes into a URL. One honest regression is recorded
+  below, not papered over.
+- **Consequences:** requires a new Pages build with `VITE_API_BASE_URL` set in Production, and a rendered
+  sign-in attempt has still not been exercised against the real hosts from this session. `/auth/forgot-
+  password` now genuinely reaches the API and will surface an error, because no such route exists in
+  `app/modules/auth/routes.py` - grep of `app/` returns nothing for it. Before this change the page never
+  contacted the server, so its success state was cosmetic; the failure is now visible instead of invented,
+  which is what task 60 has been saying all along. Pages *Preview* deploys will send Supabase a
+  `*-*.pages.dev` redirect target that the project's allowlist will reject until each is added or the Site
+  URL is configured to permit them.
+- **Date / owner:** 2026-10-28 / reported from the operator's browser console, diagnosed against the deployed
+  bundle and the source, fixed in source, not yet verified in a browser.
+
 ## Decision template
 ### ADR-NNN — Short title
 - **Status:** Proposed / Accepted / Superseded

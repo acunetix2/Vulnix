@@ -5,8 +5,7 @@ import { toast } from 'sonner'
 import { useAuth } from '../contexts/AuthContext'
 import { Button } from '../components/ui/button'
 import { Spinner } from '../components/app/Spinner'
-
-const API_BASE = '/api/v1'
+import { API_BASE_URL } from '../lib/constants'
 
 /**
  * Transient redirect screen: one calm progress state, one honest success state,
@@ -31,7 +30,7 @@ export function AuthCallback() {
 
   const loginWithToken = useCallback(
     async (accessToken, refreshToken, successMsg) => {
-      const response = await fetch(`${API_BASE}/auth/confirm-token`, {
+      const response = await fetch(`${API_BASE_URL}/auth/confirm-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken || '' }),
@@ -79,7 +78,7 @@ export function AuthCallback() {
 
         if (implicitType === 'signup' || implicitType === 'recovery' || implicitType === 'invite') {
           // Email confirmation landed here
-          const response = await fetch(`${API_BASE}/auth/confirm-token`, {
+          const response = await fetch(`${API_BASE_URL}/auth/confirm-token`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ access_token: implicitToken, refresh_token: refreshToken }),
@@ -111,7 +110,7 @@ export function AuthCallback() {
       if (code) {
         if (provider && redirectUri) {
           // OAuth with PKCE
-          const response = await fetch(`${API_BASE}/auth/oauth/callback`, {
+          const response = await fetch(`${API_BASE_URL}/auth/oauth/callback`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ provider, code, redirect_uri: redirectUri }),
@@ -131,7 +130,7 @@ export function AuthCallback() {
 
         // Email confirmation (PKCE)
         const confirmRedirect = `${window.location.origin}/auth/callback`
-        const response = await fetch(`${API_BASE}/auth/confirm`, {
+        const response = await fetch(`${API_BASE_URL}/auth/confirm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code, redirect_uri: confirmRedirect }),

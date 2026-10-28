@@ -239,5 +239,31 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       contain no `=`; nothing was committed and nothing left the machine, but the value is in that session's
       transcript and should be treated as exposed. The file itself is gitignored and stays put.
 
+## Requested 2026-10-28 — the deployed console reaches the deployed API
+
+- [x] Route the auth pages through the shared API base. `SignIn.jsx`, `SignUp.jsx`, `AuthCallback.jsx` and
+      `ForgotPassword.jsx` each declared `const API_BASE = '/api/v1'` and called `fetch()` with it, so on
+      Pages their requests landed on the static host and Cloudflare answered 405 to the POST. All four now
+      import `API_BASE_URL` from `src/lib/constants.js` (ADR-027). Email sign-in was never broken because it
+      goes through `src/services/api.js`, which already used the shared constant.
+- [ ] Set `VULNIX_CORS_ALLOW_ORIGINS=https://vulnix.aventorgo.xyz` in Render, at the `vulnix-backend` group
+      level so all three services inherit it, and re-run the preflight until `OPTIONS /api/v1/workspaces`
+      answers 200 with `access-control-allow-origin`. It was still empty on 2026-10-28: the same probe
+      returned 405 with no CORS headers at all, which is the no-middleware signature rather than a refused
+      origin. This is now a hard prerequisite for sign-in, not a nicety, because the auth calls are
+      genuinely cross-origin.
+- [ ] Turn on Google in Supabase. `POST /auth/oauth/init` only builds
+      `{supabase_url}/auth/v1/authorize?provider=google&redirect_to=...` (`app/modules/auth/routes.py:281`),
+      so the provider and its OAuth credentials live in the Supabase project, not in this repository, and the
+      redirect target `${window.location.origin}/auth/callback` must be in Supabase's allowed list.
+- [ ] Give Pages the branch-preview story, or record that it does not have one. `redirect_uri` is built from
+      `window.location.origin`, so a Preview deploy asks Supabase for a `*-*.pages.dev` target that the
+      project will refuse unless each is allowlisted.
+- [ ] Implement `POST /auth/forgot-password`. No such route exists anywhere in `app/`, and until this change
+      the page never reached the server, so its success toast was cosmetic. It now calls a real API and will
+      show a real error - which is the honest state, not the finished one.
+- [ ] Sign in with GitHub and with Google in a browser against the deployed pair, and record what the
+      callback page does with the code. Nothing in this change has been exercised beyond a build.
+
 ## Working agreement
 Do not start the next phase merely because the previous phase's code exists. Confirm tests, acceptance criteria, security review, and documentation updates first.
