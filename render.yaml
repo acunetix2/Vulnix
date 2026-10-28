@@ -1,0 +1,199 @@
+# Render Blueprint for the Vulnix API, its scan worker, and the queue they share.
+#
+# One blueprint, four services: the API, a Celery worker that runs audits, a beat
+# process that retries outbound integration deliveries, and the Redis instance that
+# carries the queue. The console is not here on purpose - it is a static SPA and is
+# deployed to Cloudflare Pages (see Requirements & Specs/DEPLOYMENT.md).
+#
+# Any environment variable below with `sync: false` and no value is asked for once,
+# when the blueprint is first created, and is never overwritten by a later sync.
+# Fill those in the Render dashboard; they are credentials and hostnames this
+# repository must not carry.
+
+services:
+  # The public API. Render gives a web service a subdomain and a health check;
+  # /health is liveness only, so a database blip cannot trigger a restart loop -
+  # /api/v1/ready is the endpoint that reports on dependencies.
+  #
+  # Region: all four services below must sit together, and nearest the database.
+  # Cross-region database latency is paid on every request, and a cross-region queue
+  # is paid on every step of an audit. Change these four `oregon` values together.
+  - type: web
+    name: vulnix-api
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Runs after the build and before the new instance starts, so a migration is
+    # applied - or fails - before any traffic moves. Render only allows it on a paid
+    # instance type, so it stays commented until the plan says otherwise; until then
+    # run `alembic upgrade head` from this service's Shell after each deploy that
+    # changes migrations/. Do not do both at once.
+    # preDeployCommand: alembic upgrade head
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: vulnix-backend
+      - key: VULNIX_CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: vulnix-redis
+          property: connectionString
+
+  # Audits run here, never inside a request. A web request on Render is cut off at
+  # about 100 seconds and a real audit of a repository takes minutes - its own ceiling
+  # is VULNIX_SCAN_TOTAL_TIMEOUT_SECONDS, 900 by default - so the API only enqueues the
+  # job (ADR-024). One process, one scan at a time: the worker unpacks an
+  # attacker-controlled archive, and a second concurrent scan buys nothing except a
+  # wider blast radius on the same 512 MB.
+  - type: worker
+    name: vulnix-worker
+    runtime: python
+    region: oregon
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.workers.celery_app.celery_app worker -l INFO --concurrency=1
+    envVars:
+      - fromGroup: vulnix-backend
+      - key: VULNIX_CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: vulnix-redis
+          property: connectionString
+
+  # A delivery that fails into backoff is claimed only by the periodic sweep, so
+  # without this process a retried Slack or Jira notification waits forever with
+  # nothing on the API to say so. Beat holds no work itself - it only posts.
+  - type: worker
+    name: vulnix-scheduler
+    runtime: python
+    region: oregon
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A app.workers.celery_app.celery_app beat -l INFO
+    envVars:
+      - fromGroup: vulnix-backend
+      - key: VULNIX_CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: vulnix-redis
+          property: connectionString
+
+  # Queue and result store. ipAllowList is empty: only the three services above
+  # reach it, over Render's private network, and nothing on the internet can.
+  # noeviction because a dropped queue job is a lost audit, not a lost cache entry.
+  - type: keyvalue
+    name: vulnix-redis
+    region: oregon
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+envVarGroups:
+  - name: vulnix-backend
+    envVars:
+      # Pinned so a rebuild of Render's default cannot change the interpreter the
+      # app runs on underneath a deploy.
+      - key: PYTHON_VERSION
+        value: 3.14.8
+      - key: VULNIX_APP_ENV
+        value: production
+      - key: VULNIX_LOG_LEVEL
+        value: INFO
+      # The schema belongs to the migrations, not to first contact: auto-create
+      # would let a half-applied model table answer traffic silently.
+      - key: VULNIX_DB_AUTO_CREATE
+        value: "false"
+      - key: VULNIX_DATABASE_URL
+        sync: false
+      # The shipped default is eager, which runs an audit inside the request that
+      # asked for it - a request Render ends at about 100 seconds. Off here is what
+      # makes the worker below the thing that actually runs audits (ADR-024).
+      - key: VULNIX_CELERY_EAGER
+        value: "false"
+      # Render's filesystem is rebuilt on every deploy, so scratch lives in /tmp
+      # and archives live in object storage, never in the source tree.
+      - key: VULNIX_SCAN_WORKDIR
+        value: /tmp/vulnix-scans
+      # Supabase issues the tokens this API verifies. The JWKS URL is what a
+      # production deployment uses; the JWT secret is the legacy HS256 path.
+      - key: VULNIX_SUPABASE_URL
+        sync: false
+      - key: VULNIX_SUPABASE_ANON_KEY
+        sync: false
+      - key: VULNIX_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: VULNIX_SUPABASE_JWKS_URL
+        sync: false
+      # The console is served from Cloudflare Pages, so every call it makes is
+      # cross-origin and must be named here. Comma-separated, exact origin, no
+      # trailing slash, no wildcard (ADR-022).
+      - key: VULNIX_CORS_ALLOW_ORIGINS
+        sync: false
+      # Where a finished OAuth consent sends the browser back to, and the public
+      # origin of this API as registered with each provider. Both are hostnames,
+      # and Render assigns them when the service is created.
+      - key: VULNIX_CONSOLE_BASE_URL
+        sync: false
+      - key: VULNIX_OAUTH_REDIRECT_BASE_URL
+        sync: false
+      # Quarantined uploads and avatars have to survive a rebuild and be visible
+      # to both the API and the worker, which is a shared bucket (ADR-023).
+      - key: VULNIX_STORAGE_BACKEND
+        value: s3
+      - key: VULNIX_S3_ENDPOINT_URL
+        sync: false
+      - key: VULNIX_S3_BUCKET
+        sync: false
+      - key: VULNIX_S3_ACCESS_KEY
+        sync: false
+      - key: VULNIX_S3_SECRET_KEY
+        sync: false
+      # Stated even though it is the code default: a signing region is mandatory for
+      # SigV4, "auto" is what R2 expects, and a plain Amazon S3 bucket wants its own
+      # region name here instead.
+      - key: VULNIX_S3_REGION
+        value: auto
+      # Reviewers are configured per deployment. A key left blank makes that one
+      # reviewer simply not appear in the catalog; the audit then reports the
+      # refusal rather than falling through to an endpoint nobody named.
+      - key: VULNIX_AI_ENABLED
+        value: "true"
+      - key: VULNIX_AI_PROVIDER
+        value: groq
+      - key: VULNIX_AI_API_KEY
+        sync: false
+      - key: VULNIX_AI_FALLBACK_ENABLED
+        value: "true"
+      - key: VULNIX_AI_FALLBACK_PROVIDER
+        value: groq
+      - key: VULNIX_AI_FALLBACK_API_KEY
+        sync: false
+      - key: VULNIX_AI_GEMINI_API_KEY
+        sync: false
+      - key: VULNIX_AI_OPENROUTER_API_KEY
+        sync: false
+      # Outbound delivery stays off until an operator turns it on: a workspace
+      # supplies the target URL, which makes this the deployment's SSRF surface.
+      # Set this to true only together with VULNIX_INTEGRATION_SECRET_KEY.
+      - key: VULNIX_INTEGRATIONS_ENABLED
+        value: "false"
+      - key: VULNIX_INTEGRATION_SECRET_KEY
+        sync: false
+      # OAuth app credentials for the Connect buttons. A provider with an empty
+      # pair reports oauth_available=false, so its button is not offered.
+      - key: VULNIX_GITHUB_CLIENT_ID
+        sync: false
+      - key: VULNIX_GITHUB_CLIENT_SECRET
+        sync: false
+      - key: VULNIX_SLACK_CLIENT_ID
+        sync: false
+      - key: VULNIX_SLACK_CLIENT_SECRET
+        sync: false
+      - key: VULNIX_JIRA_CLIENT_ID
+        sync: false
+      - key: VULNIX_JIRA_CLIENT_SECRET
+        sync: false

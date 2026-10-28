@@ -1,0 +1,8 @@
+# Cloudflare Pages reads this file from the build output; Vite copies public/ there.
+#
+# The console is a single-page app: the router owns /app/projects, /signin and every
+# other path, but only index.html exists on the bucket. Without this rewrite, a
+# refresh - or anyone opening a shared deep link - gets Pages' 404 instead of the
+# console. Assets are matched by real paths first, so this stays a 200 rewrite for
+# the shell rather than a redirect that would lose the address bar.
+/* /index.html 200

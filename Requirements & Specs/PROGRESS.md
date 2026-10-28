@@ -46,9 +46,23 @@
       generated-and-rotatable webhook signing secret, and `POST /projects/{id}/uploads/github`, which
       streams a selected repository's archive into the same quarantined intake as an upload (ADR-010,
       which supersedes the ADR-007 alternative that rejected consent flows).
+- [x] Deployment shape: the console builds as a static SPA for Cloudflare Pages with its own history
+      fallback and header policy, and the backend deploys on Render as an API plus a Celery worker, a beat
+      sweeper and a private Redis, with quarantined archives in an S3-compatible bucket. `render.yaml`,
+      `backend/requirements.txt`, `frontend/public/_redirects`, `frontend/public/_headers` and the runbook in
+      `DEPLOYMENT.md` (ADR-022 to ADR-025). Authored and validated against the vendors' documented formats;
+      no real deploy has been executed yet.
+- [x] Continuous integration: `.github/workflows/ci.yml` runs on every push, every pull request and manual
+      dispatch, in two jobs. `backend` installs `.[dev,postgres]` on Python 3.14 and runs ruff then pytest;
+      `frontend` installs from the lockfile on Node 22 and runs eslint, `vite build`, and an assertion that
+      the Pages config files reached `dist`. No repository secret is needed or used — the suite pins its own
+      environment. Both lint steps report findings without failing the run until the debt in `TASKS.md` is
+      paid, which is the only place `continue-on-error` appears. (ADR-026)
 
 ## In progress
-- [ ] CI pipeline for lint and tests.
+- [ ] Make the two CI `Lint` steps blocking, once 9 ruff findings and 39 eslint errors are gone (TASKS.md).
+- [ ] Observe the first CI run: it executes the suite on Linux, where the `sandbox_env` non-`nt` branch and
+      the symlink archive tests have never been exercised.
 - [ ] OAuth connect UI: Connect/Disconnect buttons in place of every pasted token, the channel/site/
       project/repository pickers, the one-time webhook secret reveal, and `/app/integrations/github`.
 - [ ] Daily credits heatmap on the AI usage ledger.
@@ -64,7 +78,8 @@
 ## Next actions
 1. Build the OAuth connect UI over the endpoints that now exist, including the GitHub screen and route.
 2. Build the daily credits heatmap on `GET /workspaces/{id}/ai/usage` (sparse rows; client zero-fills).
-3. Add GitHub Actions workflow running `ruff check` and `pytest`.
+3. Deploy the stack: create the Render blueprint from `render.yaml`, the Cloudflare Pages project from
+   `frontend`, then set the two hostnames and the CORS allowlist that only exist after the first deploy.
 4. Containerize the worker with resource limits and network restrictions.
 5. Run Vulnix against its own backend code as a dogfood scan.
 6. Define retention/deletion policy and audit-log retention.
@@ -569,3 +584,73 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
 - Caution for the owner, recorded without the value: a pytest traceback echoed the request headers, so the
   live OpenRouter bearer token appeared in that console output and in this session's log. It is not in any
   tracked file, in `.env.example`, or in the commit described here.
+
+## Verification log (2026-10-27, deployable on Cloudflare Pages and Render)
+
+- Full backend suite: **375 passed, 1 warning in 633.32s**. The warning is the pre-existing Starlette
+  `testclient` deprecation notice. Twelve of the new tests are this change's (CORS, S3 storage, queue wiring).
+- `npx vite build` succeeded and `dist/` contains `_redirects` and `_headers` at the root, which is the
+  evidence that Pages will actually read them: both files are authored in `frontend/public/`, which Vite
+  copies into the output directory, and Cloudflare parses them from the output directory only.
+- Preflight behaviour was observed, not assumed: an `OPTIONS /health` with a listed `Origin` answers 200 and
+  carries `access-control-allow-origin`, the six allowed methods and, because `CORSMiddleware` sits inside the
+  request-context middleware, also `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` and
+  `X-Request-ID`. An unset allowlist adds nothing to any response, so the dev proxy path is untouched. That
+  assertion is now in `tests/unit/test_cors.py`.
+- `render.yaml` was validated against Render's own published JSON Schema (`render.com/schema/render.yaml.json`):
+  every service key, `type`, `plan`, `region` and `runtime` value, all 36 group variables and every
+  `fromGroup` / `fromService` reference. Two things the schema corrected while writing it: the service type is
+  `worker`, not `backgroundWorker`, and a `keyvalue` service requires `ipAllowList`, which is set to `[]`
+  because nothing outside the private network should reach the queue.
+- `preDeployCommand` is present but commented out. Render only allows it on a paid instance type, and a
+  blueprint that fails validation blocks the whole environment, so the default shape is the one that creates;
+  DEPLOYMENT.md says when to uncomment it and what to run by hand until then.
+- boto3 is not installed in this venv, which is why the storage tests substitute the module rather than skip:
+  the assertions are about the client configuration a real R2 bucket demands, and a skip would have meant no
+  coverage of exactly the code that fails in production. `boto3>=1.34.117` is now the `s3` extra's floor, the
+  release that accepts `request_checksum_calculation`.
+- Two claims in the first draft of DEPLOYMENT.md were wrong and were corrected against the code: there is no
+  signed download URL anywhere (an archive is read server-side by `app/scanning/pipeline.py` and by the
+  reviewer path; the console sees only upload metadata), and the pooled-versus-direct Supabase advice had no
+  basis in this codebase, so it now says only what is true - the API opens a connection per thread and the
+  worker one per process.
+- Not verified, stated plainly: no Pages project and no Render environment has been created, so the build
+  settings, the prompted secret names, the queue wiring and the SPA fallback are unproven against the real
+  hosts. Lint debt exists and is not this change's: `npx eslint .` reports 39 errors and 2 warnings across 14
+  files, the largest being `src/pages/Landing.jsx` (16) and `src/components/app/ThreatIntelCard.jsx` (6), and
+  none of those files is touched here - this change edits no `src/` file at all. `ruff check app tests` reports
+  9, in `app/agent/*`, two long lines in `app/modules/auth/routes.py`, an unsorted import block in
+  `app/modules/scans/routes.py`, and the deliberate `import app.agent` side-effect at `app/main.py:110`. All of
+  them were already present at `854f87e`; every file this change does touch is clean under both linters.
+
+## Verification log (2026-10-27, the CI workflow)
+
+- `.github/workflows/ci.yml` parses, and its shape was read out of the parsed document rather than from the
+  text: triggers `push`, `pull_request`, `workflow_dispatch`; `permissions: contents: read`; `concurrency`
+  keyed on the ref with `cancel-in-progress`; two jobs with working directories `backend` and `frontend`,
+  timeouts 30 and 15; `continue-on-error` present on exactly the two `Lint` steps and nowhere else.
+- `ruff check . --output-format=github` was run for real (ruff 0.17.2) and emits `::error file=…,line=…`
+  annotations, so the format is supported by the pinned `ruff>=0.7,<1.0` range and the findings will appear on
+  the line in the Checks tab instead of only in a log.
+- `ruff check .` over the whole `backend` directory reported **25**, and 16 of them are in
+  `migrations/versions/*.py`: `I001` on Alembic's generated import block and `E501` on its long
+  `sa.Column(...)` lines. Excluding that directory in `pyproject.toml` leaves **9** findings, all in authored
+  application code, 6 auto-fixable. `migrations/` is excluded from lint only — `alembic upgrade head` and the
+  tests that read the schema are untouched by it.
+- `test -f dist/_redirects && test -f dist/_headers` passes against the local build output, which is the same
+  assertion the frontend job makes after `vite build`.
+- `src/lib/constants.js:33` is `import.meta.env.VITE_API_BASE_URL || '/api/v1'`, so a CI build with no
+  environment variable produces a bundle that names no host. This is what makes it safe to run the frontend
+  job without secrets.
+- Deliberately not run locally: `npm ci`. It deletes `node_modules` before reinstalling, and the owner's dev
+  server is live on `:5173` from that directory. The lockfile is committed and `npx vite build` plus
+  `npx eslint .` both pass against it, but `npm ci` itself is first exercised by CI.
+- Not verified, stated plainly: no workflow run has been observed. Whether Actions is enabled for the
+  repository is not checkable from this machine, the Linux run resolves a dependency set this venv has never
+  had, and it executes two code paths that have never run anywhere — `sandbox_env()`'s non-`nt` branch at
+  `app/scanning/adapters/base.py:134`, and ZIP symlink entries at extraction time on a host that can actually
+  create them. A first run that comes back red is information about Linux, not CI being broken.
+- Caution for the owner, recorded without the value: a shell command meant to list only the variable *names*
+  in `backend/.env` printed the GitHub App private key body, because that value is a multi-line PEM and its
+  inner lines contain no `=`. Nothing was committed, nothing left the machine, and the file stays gitignored,
+  but the key should be treated as exposed to that session's transcript. Rotation is a row in TASKS.md.

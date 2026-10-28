@@ -1,0 +1,29 @@
+# Cloudflare Pages reads this file from the build output; Vite copies public/ there.
+# A rule block starts with a path pattern, then indented headers. A request that
+# matches several blocks inherits all of them, so the patterns below stay disjoint.
+# Comments live outside the blocks: inside one, only "Name: value" lines are parsed.
+
+# The console is one page holding every view. Nothing here should be framed by
+# another site, sniffed as a different content type, or leak where the visitor came
+# from - the tokens it stores belong to a signed-in engineer's findings.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+
+# Revalidated on every navigation, so a deploy is live on the next page load rather
+# than whenever a cached shell happens to expire.
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+# Vite puts a content hash in every file name here: a name cannot survive a change
+# to its bytes, so the browser may hold it for a year.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# No Content-Security-Policy on purpose. The animation layer writes inline styles on
+# the elements it moves, so any policy that keeps it working has to carry
+# style-src 'unsafe-inline', and the PDF report export hands the browser a blob:
+# URL. A wrong policy does not fail visibly - it removes a feature for signed-in
+# users while looking fine in a preview. Ship one as its own change, with the whole
+# console exercised behind it.

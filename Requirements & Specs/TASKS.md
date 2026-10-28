@@ -9,7 +9,9 @@ Use `[ ]` for pending, `[/]` for in progress, and `[x]` only after verification.
 - [x] Add `.gitignore`, `.env.example`, formatter, linter, and test runner.
 - [ ] Write threat model and security review checklist. (AI_SECURITY.md covers AI/worker threats; platform-wide checklist pending)
 - [x] Create local development environment for PostgreSQL and Redis. (infrastructure/compose.yaml)
-- [ ] Establish CI for linting and unit tests.
+- [/] Establish CI for linting and unit tests. (`.github/workflows/ci.yml` runs pytest and the frontend
+      build on every push; both lint steps report findings but do not fail the run until the debt below is
+      paid — ADR-026)
 
 ## Phase 1 — API and persistence
 - [x] Implement database migrations for users/workspaces/memberships/projects/scans/findings/tool runs/audit events.
@@ -169,11 +171,69 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       the page mounted, so a run that failed in about a minute reported `runtime 36m 39s` and the number grew
       with the calendar. It now times to `completed_at` and keeps the ticking clock for live runs only.
       (ADR-020)
+- [x] Make the API answerable from a deployed console origin. `VULNIX_CORS_ALLOW_ORIGINS` is an explicit,
+      exact-origin allowlist and `CORSMiddleware` is mounted only when it is non-empty, with credentials off
+      because the bearer token is set by the console itself. An empty list keeps the dev proxy same-origin, and
+      the middleware sits inside the request-context layer so a preflight still gets the security headers.
+      Covered by `tests/unit/test_cors.py`. (ADR-022)
+- [x] Make the S3 storage backend usable against an S3-compatible bucket. A signing region setting (`auto` for
+      R2, boto3 otherwise refuses to sign), no automatic CRC32 write trailer, a sha256 computed from the bytes
+      this app accepted, and a `put_stream` that hashes in bounded chunks and re-sends from position zero instead
+      of buffering 100 MiB in a 512 MB process. `boto3` floored to the release that accepts those options;
+      `tests/unit/test_storage_s3.py` stubs the module so the assertions run without it installed. (ADR-023)
+- [x] Deploy the backend as a queue, not a request. `render.yaml` defines the API web service, a
+      `--concurrency=1` worker, the beat process and a private Redis, with `/health` as the health check and
+      a commented `preDeployCommand: alembic upgrade head` (Render only runs it on a paid instance type, so
+      the Shell is the fallback the runbook describes). The beat schedule now lives in the Celery app because a
+      delivery in backoff is only ever claimed by that sweep. `backend/requirements.txt` installs the project
+      plus the Postgres and storage extras. (ADR-024)
+- [x] Deploy the console as a static SPA. `frontend/public/_redirects` carries the `/* /index.html 200` fallback
+      the router needs and `frontend/public/_headers` the transport and cache policy; `DEPLOYMENT.md` is the
+      runbook for both hosts, including the order the cross-referencing hostnames become knowable. No CSP is
+      shipped, and the reason is recorded rather than left implied. (ADR-025)
+- [ ] Sign the console with a Content-Security-Policy. Deferred by ADR-025: the animation layer writes inline
+      styles and the PDF export uses a `blob:` URL, so a workable policy needs `style-src 'unsafe-inline'` and
+      the whole console exercised behind it — a wrong policy removes a feature quietly instead of failing.
+- [ ] Upload straight to object storage. A 100 MiB archive still passes through the API process and out to the
+      bucket inside one request, which is slow on a small instance and can meet a host's request ceiling. The fix
+      is a signed PUT from the browser, which is a new API surface and a new client path. (ADR-023 consequence)
 - [ ] Name a reviewer's refusal on the page, not only in the server log. `AI_MISCONFIGURED` currently reads
       the same whether the credential was rejected, the request shape was refused, or the review was blocked
       by a content filter; the distinguishing status and reason tag exist and are logged, so surfacing the
       tag on the step would let an operator triage from the console. Needs a decision on how much of a
       vendor's machine-readable code belongs in a client surface that is otherwise alias-only.
+
+## Requested 2026-10-27 — continuous integration
+- [x] Run the suite and the build on every push. `.github/workflows/ci.yml` has a `backend` job (Python 3.14,
+      `pip install -e ".[dev,postgres]"`, ruff, pytest) and a `frontend` job (Node 22, `npm ci`, eslint,
+      `vite build`, plus an assertion that `_redirects` and `_headers` reached `dist`). It needs no repository
+      secret, because `tests/conftest.py` pins the environment the suite asserts on. `backend/pyproject.toml`
+      now excludes `migrations/` from ruff so the report describes authored code. First run not yet
+      observed. (ADR-026)
+- [ ] Make the backend `Lint` step blocking by clearing 9 ruff findings, 6 of them auto-fixable: 3 `F401`
+      (`app/agent/code_agent.py:26`, `app/agent/dep_agent.py:12`, `app/main.py:110`), 3 `E501`
+      (`app/agent/intel_agent.py:135`, `app/modules/auth/routes.py:600` and `:602`), 1 `UP035` and 1 `UP037`
+      (both `app/agent/router.py`), 1 `I001` (`app/modules/scans/routes.py:3`). Two cautions: the `F401` at
+      `app/main.py:110` is the deliberate `import app.agent` whose side effect registers the agent's tools, so
+      it needs a `# noqa: F401` rather than deletion, and removing an unused import can drop the only thing
+      that made a module execute — this needs a full pytest run after, not just a green ruff.
+- [ ] Make the frontend `Lint` step blocking by clearing 39 errors and 2 warnings across 14 files: 29
+      `no-unused-vars`, 6 `react-hooks/set-state-in-effect`, 3 `no-undef`, 1 `react-refresh/only-export-components`,
+      2 `react-hooks/exhaustive-deps`. The `no-undef` findings are the only ones that may be live bugs — an
+      undefined identifier is a `ReferenceError` at runtime, not a style complaint — and deserve their own read
+      before anything is renamed. Largest file: `src/pages/Landing.jsx` (16). Six of these are hook logic and
+      cannot be verified without a signed-in session.
+- [ ] Fail a CI run on a vulnerable dependency. GitHub reports 5 advisories against the default branch
+      (1 high, 2 moderate, 2 low) and the workflow does not look at them; this is also Phase 5's
+      "Run dependency, secret, and static-analysis scans on the platform itself". The gate needs a prior
+      decision about what a transitive advisory means for a build, because `semgrep`, `gitleaks`, `bandit`
+      and `npm audit` are exactly the tools Vulnix's own adapters wrap.
+- [ ] Give the frontend a test runner. There is none, so `vite build` is the only functional check that job
+      has, and it proves the bundle compiles rather than that a page behaves.
+- [ ] Rotate the GitHub App private key in `backend/.env`. On 2026-10-27 a shell command intended to list
+      only variable names printed the key body, because the value is a multi-line PEM whose inner lines
+      contain no `=`; nothing was committed and nothing left the machine, but the value is in that session's
+      transcript and should be treated as exposed. The file itself is gitignored and stays put.
 
 ## Working agreement
 Do not start the next phase merely because the previous phase's code exists. Confirm tests, acceptance criteria, security review, and documentation updates first.

@@ -24,7 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.2"]
-s3 = ["boto3>=1.34"]
+s3 = ["boto3>=1.34.117"]
 dev = [
     "httpx>=0.27,<1.0",
     "pytest>=8.3,<9.0",
@@ -40,6 +40,12 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 110
 target-version = "py311"
+# Alembic writes these files, and the two rules that fire in them are its own shape:
+# an unsorted generated import block and long `sa.Column(...)` lines. Formatting a
+# migration is not a thing anyone will do by hand, so linting them only adds noise to
+# the report. This is a lint-scope exclusion, not a statement that the directory is
+# unreviewed - the schema it applies is still owned by review.
+extend-exclude = ["migrations"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
