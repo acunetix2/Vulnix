@@ -823,8 +823,10 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
   (`6h` window, one row), the worst state inside a slice with its own count and 50.0% uptime, an unrecognised
   answer counted as a problem rather than a gap, and the public endpoint returning `services: {}` before the
   first observation. `test_status.py` and `test_cors.py` together: **27 passed**. `ruff check` and
-  `ruff format --check` pass on the changed files. The full suite was still executing when this was committed;
-  its number is recorded in the log above rather than assumed here.
+  `ruff format --check` pass on the changed files. The suite that started before the commit exited 0 with an
+  empty captured output file, so it proved nothing; it was re-run into a log this session controls: **398
+  passed**, 2 warnings, in 10:59 - five more than the 393 recorded for the previous change, matching the five
+  new status tests.
 - Rendered, not assumed. A throwaway SQLite database (created, seeded with 1,440 one-minute observations across
   24 hours containing a redis-down stretch, an `ai=disabled` stretch, an unreachable stretch, a database-down
   stretch and an `integrations=not_configured` stretch, then deleted along with the temp directory) was served
@@ -848,3 +850,130 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
   carries the status feature, so builds from `dev` do land. Twenty minutes after `1b9fdd9` the fallback fix had
   not appeared, and the response carried `cf-cache-status: DYNAMIC` with `max-age=0, must-revalidate`, so the
   delay is a pending build, not edge cache.
+- Re-checked after pushing `36eab53`, and both hosts still serve the previous build. The live Pages bundle is
+  unchanged (`index-BSM327nQ.js`, which contains the `not_enabled` copy but neither "Recorded history for" nor
+  "Nothing recorded for this service yet"), and `GET /api/v1/status` on Render answers 200 with no `services`
+  key and `total_checks: 0`. Neither host has picked up a commit since `facfdc9`, so this is one question -
+  whether auto-deploy is enabled - not two bugs. Nothing is recording rows either, which is task #98: the
+  Render service running `celery -A app.workers.celery_app.celery_app beat` does not exist yet.
+
+## Verification log (2026-10-28, the bars were given the shape the owner drew)
+
+- Request: a screenshot of another status page - one full-width ribbon of tall thin bars per service, the name
+  on the left and its state on the right, and "90 days ago / 99.98 % uptime / Today" under the strip. The
+  shipped rows were cards with a short strip and its number squeezed to the right of the bars, which is the same
+  data in a different shape. Presentation only: no API, aggregation or test change, and the window stays ours
+  (6h / 24h / 7d, 60 slices) rather than 90 days, because retention is 14 days.
+- What changed in `frontend/src/pages/landing/resources/SystemStatus.jsx`: the six rows became one
+  divider-separated card instead of six bordered ones; each bar strip went full width at `h-8` with `gap-[3px]`
+  and `rounded-[3px]`, matching the system-wide strip above it; the header dropped the icon tile and the state
+  dot for a small coloured icon beside the name and the state as coloured text on the right; the caption moved
+  under the strip as three parts (`<window> ago`, `<percent> uptime`, `Now`); the check count and outage count
+  became a tooltip on the percentage, and each bar got its slice time from the same grid via `buckets[index]`.
+- Then, on the owner's second look: *"even when there's nothing recorded it should show the bars."* The dashed
+  placeholder was the wrong instinct - the row is a chart, and a chart that disappears is the page hiding its
+  own emptiness. A service with no recorded observation now renders the full 60-slice ribbon in the same
+  `nodata` grey the grid already uses for a slice nobody checked, with the caption reading "No checks yet" and
+  the accessible name reading "History for Database, nothing recorded yet", so grey is never mistaken for a
+  state. The slice count comes from the grid the API returns and falls back to a constant 60 only when the
+  request itself failed and there is no grid to read.
+- Rendered, both states. A throwaway SQLite database seeded with 1,440 one-minute observations over 24 hours
+  (redis down for 21, the API unreachable for 5, database down for 4, `ai=disabled` for 9,
+  `integrations=not_configured` for 5) was served by a temporary API on 8732, with the SPA built against it and
+  previewed on 5301; both processes, the seed script and the database are deleted and neither port listens
+  again. All six rows measured 60 bars, 32 px tall, 4.3 px wide, spanning the 437 px row; Database and Queue
+  each carried emerald *and* rose bars, the other four only emerald; captions read "24 hours ago / 99.72%
+  uptime / Now" (Database) and "98.54%" (Queue). One real screenshot was captured (the viewport then went
+  hidden, so it is one frame, not a tour) and it shows the ribbon, the caption and the description line as
+  intended.
+- The empty and first-observation states, rendered rather than reasoned about. Against a fresh database with no
+  rows: six strips of 60 bars each, every bar `rgb(241, 245, 249)` (the `nodata` grey), caption "24 hours ago /
+  No checks yet / Now", no dashed placeholder anywhere. Then one real observation was written by calling
+  `service.probe()` against the running API - not a fixture, the same code path Beat uses - and the page
+  re-read: 59 grey bars plus one live slice per row, emerald for five services and rose for Queue because the
+  local Redis is genuinely down, captions switched to "100% uptime" and "0% uptime", tooltips to "1 checks, 0 of
+  them in an outage". That is the exact shape production will show one minute after a scheduler starts: a full
+  ribbon that fills in from the right rather than a page that flips between two layouts. No screenshot of
+  these two states - the viewport was unavailable, so the evidence is computed colours and measured heights.
+- The same rule applied to the headline strip, and the third state proved with it: the SPA was built against a
+  port with nothing listening, so both fetches fail. The banner read "This page could not load", the six
+  service rows measured 60 grey bars each, and "Recorded checks" - which had been rendering an empty box in
+  that case - measured 60 grey bars too. Zero dashed elements remained on the page. `SLICES = 60` is the only
+  place the count is invented, and only when the grid the server returns is absent.
+- Not shown as a bug, checked as one: `ai` and `integrations` report 100% uptime and no grey bars despite the
+  seeded `disabled` / `not_configured` stretches, because 24 one-minute observations share a 24-minute slice and
+  working outranks never-switched-on - the same reasoning recorded above, and the sparse-window case is covered
+  by `test_every_service_the_checks_named_has_its_own_row_of_bars`.
+- Incidental confirmation of ADR-022: the first preview attempt rendered "This page could not load", because the
+  temporary API did not list `http://127.0.0.1:5301` in `VULNIX_CORS_ALLOW_ORIGINS`. The page blamed its own
+  blocked fetch rather than inventing an outage, which is the behaviour that was asked for, and it cleared once
+  the origin was allowlisted.
+- Verification: `npx eslint src/pages/landing/resources/SystemStatus.jsx` exits 0 and `vite build` succeeds (the
+  pre-existing chunk-size advisory is the only warning). No backend file changed, so the **398 passed** above
+  still stands for this tree. `dist/` was rebuilt with the normal API base after the temporary build.
+- Still the same two blockers, unchanged by this: neither host has built since `facfdc9`, and no Beat process
+  exists, so the deployed page will show a ribbon of grey bars and "Not updated yet" until both are fixed.
+
+## Verification log (2026-10-28, the status page stopped talking like the codebase)
+
+- Request: the owner pointed at two strings - "Your browser could not reach the status service… Recorded
+  history below is unaffected" and "Our scheduler records a check once a minute; until it has written one, the
+  summary below is a live check made by your browser" - as language a visitor has no reason to read. Swept the
+  whole page rather than those two, because the same vocabulary appears in the state labels, the section
+  headings, the fact cards and the incident list.
+- Vocabulary, all of it visible text: `Operational / Limited / Unavailable / Not enabled / No check` became
+  "Working / Having trouble / Down / Not turned on / No result yet"; `Services` became "What we look at",
+  `Recorded checks` became "History", `Recent incidents` became "Recent problems", `Availability` became
+  "Working", `Checks in window` became "Checks taken", `Response time` became "How fast it answers"; `%
+  uptime` became `% working`; `Resolved after 4 min` became `Fixed after 4 min`, `Being checked` became "We are
+  on it", `No recorded outages in this window` became "Nothing went down in this period". The row names moved
+  too: `Queue` → "Audit queue", `AI review` → "Code review", `Reviewer handover` → "Backup reviewer",
+  `Integrations` → "Connected apps", with descriptions that say what they do for the reader instead of naming
+  the process that implements them. Scheduler, deployment, observation, probe, endpoint, OAuth and worker no
+  longer appear in any string a visitor can see.
+- Two things the rewrite caught that were bugs, not style. The failure panel promised "Recorded history below
+  is unaffected" and later "Everything we had already measured is still shown below" - in that state nothing is
+  shown, so it promised a thing it could not deliver; it now says only that nothing the visitor saved is
+  affected. And the page-wide subtitle keyed the "nothing has been measured yet" sentence on `recorded`, which
+  is false when the request simply failed - we do not know in that case - so it now falls back to the neutral
+  policy sentence, and the section note has its own branch for the same state.
+- Milliseconds over 1000 are now spoken as seconds ("4.1 seconds"), because a four-digit millisecond count is
+  the kind of number only the person running the service can interpret.
+- Rendered, three states, in the browser against a temporary API on 8732 and a preview on 5301 (both stopped,
+  the throwaway database deleted, neither port listening again, `dist/` rebuilt with the normal API base). With
+  no rows: the live-look subtitle, "Most of Vulnix is working", rows reading "Working / Down" and "Nothing
+  measured yet". After one observation written through `service.probe()`: "We look at every part of Vulnix once
+  a minute and keep the results for two weeks", "Updated 08:28 PM", "100% working", "CHECKS TAKEN 1", "4.1
+  seconds", and the "not turned on" explanation. Against a port with nothing listening: "This page could not
+  load" with the connection sentence, "We could not check anything just now, so every row below shows no
+  result", and 60 grey bars per row. Full visible text was read off the page in each state, so nothing above is
+  a claim about a string that was not rendered.
+- Verification: `npx eslint` exits 0 and `vite build` succeeds. No backend file and no test changed, so **398
+  passed** still stands for this tree.
+
+## Verification log (2026-10-28, one row renamed and the failure panel reworded)
+
+- Two instructions: the `supabase_auth` row should read "Authentication", and the panel that appeared as "This
+  page could not load / We could not reach Vulnix from where you are… Nothing you have saved is affected"
+  should read as a downtime notice instead.
+- Flagged before making the second change, then made anyway as instructed. That panel is the render branch for
+  `clientError` - the page's own request to `/api/v1/status` failed - and the request can fail for reasons that
+  have nothing to do with Vulnix: the content blocker that started ADR-029, a visitor who is offline, or a
+  deployment that has not allowlisted the origin the page is served from (both of the last two happened in this
+  session's own previews). Wording it as downtime means a healthy system tells an ad-blocked visitor that it is
+  down, which is the exact claim point 1 of this ADR was written to stop making. The distinction is still kept
+  everywhere else on the page - the subtitle, the section notes and the row captions describe what was measured
+  rather than asserting health - and ADR-029 point 5 now records the accepted trade-off instead of pretending
+  the rule still covers this string.
+- What the panel says now: heading "We are experiencing downtime", body "Vulnix is not answering right now, so
+  an audit may not start or finish and signing in may not work. Nothing you have saved is at risk, and there is
+  nothing you need to do - this page updates itself, and you will see it come back." The row label change is one
+  string in `COMPONENTS`; nothing else moved, and the `aria-label`, the incident copy and the bar logic are
+  untouched.
+- Rendered against a port with nothing listening, so both fetches fail and this is the real branch, not a
+  reading of the source: the page text carried "We are experiencing downtime" and the new body, the rows read
+  "Database · Checking" through "Connected apps", and `Authentication` was present while `Sign-in` was absent
+  from the whole document. The temporary preview was stopped by PID and its port confirmed free; `dist/` was
+  rebuilt with the normal API base.
+- Verification: `npx eslint src/pages/landing/resources/SystemStatus.jsx` exits 0 and `vite build` succeeds.
+  Frontend copy only - no backend file, no aggregation, no test changed - so **398 passed** still stands.
