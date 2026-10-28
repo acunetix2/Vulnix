@@ -464,7 +464,7 @@ export function VulnixLegalGraphicBanner() {
       ref={rootRef}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
-      className="relative w-full overflow-hidden pt-10 pb-0 select-none group"
+      className="relative w-full overflow-hidden pt-4 pb-0 select-none group max-h-36"
     >
       {/* Ambient purple background glow */}
       <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-4/5 h-32 bg-purple-600/15 blur-3xl pointer-events-none opacity-80 transition-opacity duration-700 group-hover:opacity-100" />
@@ -480,12 +480,12 @@ export function VulnixLegalGraphicBanner() {
         }}
       />
 
-      <div className="relative w-full max-w-4xl mx-auto flex justify-center">
+      <div className="relative w-full max-w-3xl mx-auto flex justify-center">
         <svg
           viewBox="0 0 1000 190"
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
-          className="w-full h-auto max-h-44 text-purple-500 overflow-visible"
+          className="w-full h-auto max-h-28 text-purple-500 overflow-visible"
           preserveAspectRatio="xMidYMax meet"
           role="img"
           aria-label="Animated isometric skyline of glowing purple cubes"
