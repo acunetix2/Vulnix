@@ -781,3 +781,28 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
   production Postgres, the API and scheduler have not redeployed onto this code, and no real outage has ever
   been rendered with the amber banner. Until all four hold the deployed page shows the single-check fallback -
   honest, but not the history the owner asked for.
+
+## Verification log (2026-10-28, the deployed status page showed nothing)
+
+- Read from production, not inferred: `GET /api/v1/status` returns 200 with
+  `probing_enabled: true`, `latest: null`, `overall: "unknown"`, `total_checks: 0` and all 60 buckets
+  `nodata`, while `GET /api/v1/ready` returns 200 in 1.44s with `database=up, redis=up,
+  supabase_auth=configured, ai=enabled, ai_fallback=enabled, integrations=enabled`.
+- Two separate causes, and only one of them is code.
+  1. Nothing has ever written a row. The read path proves the table exists - the 24h query returned rows-shaped
+     JSON rather than a database error - and the API has the probe origin set, so the missing piece is the
+     process that runs the schedule. There is no evidence a `vulnix-scheduler` service exists on the dashboard;
+     audits have been running inline under `VULNIX_CELERY_EAGER=true` (ADR-024), which is exactly the condition
+     under which a missing worker and a missing beat process look identical from the console.
+  2. The page had no way to show anything while that was true. It gated its live fallback on
+     `probing_enabled`, which is a statement about configuration, not about data: with probing configured and
+     zero observations it suppressed the fallback and rendered "Setting up the checks" with no service state at
+     all. The gate is now `Boolean(status.latest)` - the actual absence of a recorded row - so the summary, the
+     banner and the Services caption switch to the browser's own check and say so in three places.
+- The derived banner was checked against the live payload, not assumed: every component `/ready` reports maps
+  through `readLiveState()` to `operational`, so `deriveOverall()` returns `operational` and the page renders
+  the green panel. `deriveOverall()` mirrors `overall_state()` on the server (database down is an outage, any
+  other down or degraded value is degraded, otherwise operational) rather than inventing a second rule.
+- Verification: `npx eslint src/pages/landing/resources/SystemStatus.jsx` exits 0 and `vite build` succeeds
+  (the pre-existing chunk-size advisory is the only warning). No backend change, so the 393-test suite result
+  above still stands. Not yet verified: the deployed page - Pages has to rebuild from this commit first.
