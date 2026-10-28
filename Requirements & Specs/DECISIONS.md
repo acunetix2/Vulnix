@@ -414,8 +414,9 @@ Record material decisions here. Do not silently change a decision that affects d
   deployed API.
 
 ## ADR-029 — Status history is probed by the scheduler and read publicly
-- **Status:** Accepted, revised the same day (the fallback gate keys on recorded data rather than
-  configuration, and every service now carries its own row of bars - see points 6 and 7)
+- **Status:** Accepted, revised the same day three times - the fallback gate keys on recorded data rather than
+  configuration, every service carries its own ribbon of bars, the visible copy is rewritten for visitors, and
+  the failed-request panel was renamed a downtime notice (see points 5, 6, 7, 8 and 9)
 - **Context:** The public status page inferred the whole banner from one fetch made by the visitor's browser:
   `overall = error ? 'outage' : …`. On the deployed pair that fetch was blocked by a browser content blocker
   (`net::ERR_BLOCKED_BY_CLIENT`) and, at other moments, by Render's cold-start connection close, so the page
@@ -441,10 +442,18 @@ Record material decisions here. Do not silently change a decision that affects d
   4. History is **bucketed server-side**: 60 buckets over the requested window (6h / 24h / 7d), worst state in
      a bucket wins, consecutive outage rows grouped into incidents, 14-day retention pruned on each probe.
      The page renders that; it does not re-derive anything from the raw rows it happens to have.
-  5. The page **keeps its own failure separate from the system's**. If the status request itself fails, the
-     banner becomes a neutral slate panel reading "This page could not load" with the fallback of one live
-     browser check, labelled as such. A browser's inability to reach the API is reported as a fact about that
-     browser, never as an outage.
+  5. The page **keeps its own failure separate from the system's in behaviour, not in its headline**. If the
+     status request itself fails, the page renders a slate panel and never a green one, the rows are all
+     labelled "Checking" rather than a state, and no recorded history is affected - the fallback of one live
+     browser check is still taken and still labelled as such. The panel's *words* were then changed by the
+     owner: it first read "This page could not load / Your browser could not reach the status service", which
+     named the cause honestly but read like a broken page to a visitor, and now says "We are experiencing
+     downtime / Vulnix is not answering right now". The trade-off was raised before making the change and
+     accepted: this panel appears whenever the request fails, so an ad-blocked or offline visitor is told the
+     system is down when the evidence only supports "we could not ask". Point 9's rule that a blocked fetch
+     never claims an outage is therefore superseded for this one string, and stands for every other place on
+     the page - the subtitle, the section notes and the row captions still describe what was measured rather
+     than asserting health.
   6. Nothing is recorded until `VULNIX_STATUS_PROBE_URL` names an origin, and the endpoint says so
      (`probing_enabled: false`) instead of showing an empty graph as a perfect month. The task returns 0, not
      an error, so an unconfigured scheduler still reports clean runs. The page's live-check fallback is gated on
@@ -458,6 +467,30 @@ Record material decisions here. Do not silently change a decision that affects d
      without a change here, and each row carries its own check count and percentage alongside the bars. The
      current state of a service still comes from the latest row, so there is exactly one source for "what is
      true now" and a separate one for "what happened over the window".
+  8. **The row is a ribbon, not a card.** Each service is one divider-separated line in a single card: name on
+     the left and its current state on the right, then the full-width bar strip, then a caption reading
+     "<window> ago — <percent> uptime — Now". The count of checks and the outage count are a tooltip on the
+     percentage rather than visible text, because the reference shape the owner asked for reads as three
+     numbers per row and the third one is noise. A service with no recorded observation still gets the full
+     ribbon - 60 slices in the same `nodata` grey the grid uses for a slice nobody checked - rather than a
+     dashed placeholder, because the row is a chart and an empty chart is the honest reading of "nothing
+     recorded yet"; the caption under it says "No checks yet" and the accessible name says
+     "History for Database, nothing recorded yet", so the grey is never mistaken for a state. The headline
+     strip follows the same rule: it too renders 60 grey slices when the request failed and there is no grid
+     to read, instead of an empty box.
+  9. **The page is written for the visitor, not for the person who runs it.** No internal vocabulary appears
+     in any visible string: no *scheduler*, *deployment*, *observation*, *probe*, *endpoint*, *status service*,
+     *worker*, *OAuth*, *incident*, *uptime*, *operational*, *degraded*. The states read "Working", "Having
+     trouble", "Down", "Not turned on", "No result yet", "Checking"; the sections are "History", "What we look
+     at", "Recent problems"; a percentage says "99.72% working", not "uptime"; a slow answer says "4.1 seconds"
+     rather than a millisecond count above 1000. Service rows use the words a visitor uses for the job, not the
+     config key: `supabase_auth` is "Authentication" (an earlier draft said "Sign-in", which named the screen
+     rather than the service behind it), `redis` is "Audit queue", `ai` is "Code review", `ai_fallback` a
+     "Backup reviewer", `integrations` "Connected apps". The honest distinctions survive the rewrite, except the
+     one panel revised in point 5: a page with nothing measured still says so instead of implying health, and
+     the "not turned on" note still distinguishes a service that was never switched on from a broken one. When
+     the request itself failed, the copy no longer claims history is "shown below" - in that state nothing is
+     shown - it says only that nothing the visitor saved is at risk.
 - **Alternatives considered:** browser-derived history (rejected - it is exactly the current bug, and it makes
   the page's truth depend on the visitor's ad blocker, network and tab focus); an external status vendor such
   as Better Stack or Instatus (rejected for now - it means a second paid service, a second page to keep in

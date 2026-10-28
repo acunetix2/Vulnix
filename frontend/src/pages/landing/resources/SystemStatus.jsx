@@ -25,25 +25,25 @@ const WINDOWS = [
   { key: '7d', label: '7 days' },
 ]
 
-// The words the status API answers with, and what each looks like. An outage is
-// shown in amber, not red: this page exists to inform, and a wall of red tells a
-// visitor nothing they can act on.
+// The words the status API answers with, and what each looks like to someone who
+// has never seen this codebase. An outage is shown in amber, not red: this page
+// exists to inform, and a wall of red tells a visitor nothing they can act on.
 const STATE = {
-  operational: { label: 'Operational', dot: 'bg-emerald-500', text: 'text-emerald-600', bar: 'bg-emerald-500' },
-  degraded:    { label: 'Limited',     dot: 'bg-amber-500',   text: 'text-amber-600',   bar: 'bg-amber-500' },
-  outage:      { label: 'Unavailable', dot: 'bg-rose-400',    text: 'text-rose-500',    bar: 'bg-rose-400' },
-  not_enabled: { label: 'Not enabled', dot: 'bg-slate-300',   text: 'text-muted-foreground', bar: 'bg-muted' },
-  nodata:      { label: 'No check',    dot: 'bg-slate-300',   text: 'text-muted-foreground', bar: 'bg-muted' },
-  unknown:     { label: 'Checking',    dot: 'bg-slate-400',   text: 'text-muted-foreground', bar: 'bg-muted' },
+  operational: { label: 'Working',       dot: 'bg-emerald-500', text: 'text-emerald-600', bar: 'bg-emerald-500' },
+  degraded:    { label: 'Having trouble', dot: 'bg-amber-500',  text: 'text-amber-600',   bar: 'bg-amber-500' },
+  outage:      { label: 'Down',          dot: 'bg-rose-400',    text: 'text-rose-500',    bar: 'bg-rose-400' },
+  not_enabled: { label: 'Not turned on', dot: 'bg-slate-300',   text: 'text-muted-foreground', bar: 'bg-muted' },
+  nodata:      { label: 'No result yet', dot: 'bg-slate-300',   text: 'text-muted-foreground', bar: 'bg-muted' },
+  unknown:     { label: 'Checking',      dot: 'bg-slate-400',   text: 'text-muted-foreground', bar: 'bg-muted' },
 }
 
 const COMPONENTS = [
   { key: 'database', label: 'Database', Icon: Database, description: 'Where your projects, audits and findings are kept' },
-  { key: 'redis', label: 'Queue', Icon: Activity, description: 'Carries audit jobs from the console to the worker' },
-  { key: 'supabase_auth', label: 'Sign-in', Icon: Shield, description: 'Accounts, password sign-in and OAuth' },
-  { key: 'ai', label: 'AI review', Icon: Zap, description: 'The reviewer that reads code and writes findings' },
-  { key: 'ai_fallback', label: 'Reviewer handover', Icon: Zap, description: 'Takes an audit over when the first reviewer is unavailable' },
-  { key: 'integrations', label: 'Integrations', Icon: Plug, description: 'GitHub, Slack and Jira delivery' },
+  { key: 'redis', label: 'Audit queue', Icon: Activity, description: 'Holds audits in line and passes them on to be read' },
+  { key: 'supabase_auth', label: 'Authentication', Icon: Shield, description: 'Getting into your account, by password or another app' },
+  { key: 'ai', label: 'Code review', Icon: Zap, description: 'Reads your code and writes up what it finds' },
+  { key: 'ai_fallback', label: 'Backup reviewer', Icon: Zap, description: 'Finishes an audit if the first one cannot' },
+  { key: 'integrations', label: 'Connected apps', Icon: Plug, description: 'Sending your results to GitHub, Slack and Jira' },
 ]
 
 // A live browser check is only as good as the words /ready uses, so the same
@@ -91,27 +91,25 @@ function formatDuration(seconds) {
 function headlineFor(overall, incident) {
   if (overall === 'operational') {
     return {
-      title: 'Everything is up',
-      body: 'Every core service answered our last check. Audits, sign-in and findings are all available.',
+      title: 'Everything is working',
+      body: 'Every part of Vulnix answered a moment ago, so audits, sign-in and findings are all available.',
     }
   }
   if (overall === 'degraded') {
     return {
       title: 'Most of Vulnix is working',
-      body: 'One supporting service is having a problem, so some features may run slowly or wait longer than usual. Your data is safe and nothing here needs you to do anything.',
+      body: 'One part is having trouble, so some things may be slower than usual or keep you waiting. Nothing you saved is at risk, and there is nothing you need to do.',
     }
   }
   if (overall === 'outage') {
     return {
-      title: incident?.ongoing
-        ? "We're aware, and we're on it"
-        : 'Some of Vulnix was unavailable',
-      body: 'Our own checks could not reach part of the service, so an audit may not start or finish while it lasts. Nothing you saved is at risk, and you do not need to do anything - this page updates on its own.',
+      title: incident?.ongoing ? "We're aware, and we're on it" : 'Part of Vulnix was down',
+      body: 'We could not reach part of Vulnix, so an audit may not start or finish while it lasts. Nothing you saved is at risk, and there is nothing you need to do - this page updates itself.',
     }
   }
   return {
-    title: 'Setting up the checks',
-    body: 'No observations have been recorded yet. The scheduler writes one every minute once this deployment names an origin to probe.',
+    title: 'Nothing to show yet',
+    body: 'We have not finished our first check of Vulnix. Once it runs, what it finds appears here on its own.',
   }
 }
 
@@ -124,11 +122,11 @@ function Banner({ status, overall, recorded, clientError, loading }) {
             <CircleDashed className="size-6 text-slate-500" />
           </span>
           <div>
-            <h2 className="text-xl font-bold text-foreground sm:text-2xl">This page could not load</h2>
+            <h2 className="text-xl font-bold text-foreground sm:text-2xl">We are experiencing downtime</h2>
             <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-              Your browser could not reach the status service, which says something about this
-              connection - an ad blocker, a network rule - and not about Vulnix. Recorded history
-              below is unaffected.
+              Vulnix is not answering right now, so an audit may not start or finish and signing in may not
+              work. Nothing you have saved is at risk, and there is nothing you need to do - this page updates
+              itself, and you will see it come back.
             </p>
           </div>
         </div>
@@ -177,8 +175,8 @@ function Banner({ status, overall, recorded, clientError, loading }) {
             <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">{copy.body}</p>
             {!recorded && overall !== 'unknown' && (
               <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                This is one live check made by your browser, not a recorded history. Rows appear once the
-                scheduler writes its first observation.
+                This is what one look right now can see, not our running history. The bars below fill in as we
+                keep looking.
               </p>
             )}
           </div>
@@ -192,27 +190,35 @@ function Banner({ status, overall, recorded, clientError, loading }) {
   )
 }
 
+// The ribbon is drawn even when nothing has been recorded: a row of grey slices
+// says "no data for this window" in the same shape as the bars that do, so the
+// page never shows an empty box where a chart belongs. The count mirrors the
+// grid the server returns, and only has to be invented when that grid is
+// missing - a failed request, or a service no check has named yet.
+const SLICES = 60
+
 function HistoryStrip({ buckets, windowKey }) {
   const label = WINDOWS.find((w) => w.key === windowKey)?.label ?? 'the window'
+  const slices = buckets.length ? buckets : Array.from({ length: SLICES }, () => ({ state: 'nodata' }))
   return (
     <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-foreground">Recorded checks</h3>
+        <h3 className="text-sm font-semibold text-foreground">History</h3>
         <p className="text-[11px] text-muted-foreground">
-          Each bar covers a slice of the last {label.toLowerCase()}
+          Each bar is one stretch of the last {label.toLowerCase()}
         </p>
       </div>
       <div
         className="mt-4 flex h-10 items-stretch gap-[3px]"
         role="img"
-        aria-label={`Service history across ${label}, one bar per check window`}
+        aria-label={`History across the last ${label}, one bar per stretch`}
       >
-        {buckets.map((bucket) => {
+        {slices.map((bucket, index) => {
           const meta = STATE[bucket.state] ?? STATE.nodata
           return (
             <div
-              key={bucket.started_at}
-              title={`${formatDayTime(bucket.started_at)} — ${meta.label}${bucket.probes ? ` (${bucket.probes} checks)` : ''}`}
+              key={index}
+              title={`${bucket.started_at ? formatDayTime(bucket.started_at) : 'This stretch'} — ${meta.label}${bucket.probes ? ` (${bucket.probes} checks)` : ''}`}
               className={cn('min-w-0 flex-1 rounded-[3px]', meta.bar)}
             />
           )
@@ -220,7 +226,7 @@ function HistoryStrip({ buckets, windowKey }) {
       </div>
       <div className="mt-2 flex justify-between text-[10px] text-muted-foreground">
         <span>{buckets.length ? formatDayTime(buckets[0].started_at) : ''}</span>
-        <span>now</span>
+        <span>Now</span>
       </div>
     </div>
   )
@@ -230,7 +236,7 @@ function Incidents({ incidents, windowKey }) {
   if (!incidents?.length) {
     return (
       <p className="rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground">
-        No recorded outages in this window.
+        Nothing went down in this period.
       </p>
     )
   }
@@ -244,59 +250,71 @@ function Incidents({ incidents, windowKey }) {
           <span className="flex items-center gap-2 text-muted-foreground">
             <Clock className="size-3.5" />
             {formatDayTime(incident.started_at)}
-            {incident.ongoing ? ' — in progress' : ''}
+            {incident.ongoing ? ' — still happening' : ''}
           </span>
           <span className="font-medium text-foreground">
-            {incident.ongoing ? 'Being checked' : `Resolved after ${formatDuration(incident.duration_seconds)}`}
+            {incident.ongoing ? 'We are on it' : `Fixed after ${formatDuration(incident.duration_seconds)}`}
           </span>
         </li>
       ))}
       <li className="px-1 text-[11px] text-muted-foreground">
-        Incidents come from checks taken a minute apart, so a very short one is listed by when it was
-        first noticed. Window: {WINDOWS.find((w) => w.key === windowKey)?.label}.
+        We look once a minute, so a very brief problem is listed by when we first noticed it. Showing: {' '}
+        {WINDOWS.find((w) => w.key === windowKey)?.label}.
       </li>
     </ul>
   )
 }
 
-function ServiceRow({ label, Icon, description, state, history }) {
+function ServiceRow({ label, Icon, description, state, history, buckets, windowKey }) {
   const meta = STATE[state] ?? STATE.unknown
-  const bars = history?.bars ?? []
+  const bars = history?.bars?.length
+    ? history.bars
+    : Array.from({ length: buckets.length || SLICES }, () => 'nodata')
+  const start = `${(WINDOWS.find((w) => w.key === windowKey)?.label ?? 'window').toLowerCase()} ago`
   return (
-    <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
-      <div className="flex items-center gap-4">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted/60">
-          <Icon className={cn('size-5', meta.text)} />
+    <div className="px-4 py-5 sm:px-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Icon className={cn('size-4', meta.text)} />
+          {label}
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm font-semibold text-foreground">{label}</span>
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span className={cn('size-2 rounded-full', meta.dot)} />
-              {meta.label}
-            </span>
-          </div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
-        </div>
+        <span className={cn('text-sm font-medium', meta.text)}>{meta.label}</span>
       </div>
-      <div className="mt-3 flex items-center gap-3">
-        {bars.length ? (
-          <div
-            className="flex h-6 flex-1 items-stretch gap-[2px]"
-            role="img"
-            aria-label={`Recorded history for ${label}`}
-          >
-            {bars.map((bar, index) => (
-              <span key={index} className={cn('flex-1 rounded-[2px]', (STATE[bar] ?? STATE.nodata).bar)} />
-            ))}
-          </div>
-        ) : (
-          <div className="h-6 flex-1 rounded-[3px] border border-dashed border-border bg-muted/40" />
-        )}
-        <span className="shrink-0 text-[11px] whitespace-nowrap text-muted-foreground">
-          {history ? `${history.uptime_percent}% of ${history.checks} checks` : 'Nothing recorded for this service yet'}
+
+      <div
+        className="mt-3 flex h-8 items-stretch gap-[3px]"
+        role="img"
+        aria-label={`History for ${label}${history ? '' : ', nothing measured yet'}`}
+      >
+        {bars.map((bar, index) => {
+          const slice = STATE[bar] ?? STATE.nodata
+          const when = buckets[index]?.started_at
+          return (
+            <span
+              key={index}
+              title={`${when ? formatDayTime(when) : 'This stretch'} — ${slice.label}`}
+              className={cn('min-w-0 flex-1 rounded-[3px]', slice.bar)}
+            />
+          )
+        })}
+      </div>
+
+      <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+        <span>{start}</span>
+        <span
+          className="font-medium text-foreground/80"
+          title={
+            history
+              ? `${history.checks} checks, ${history.outage_checks} of them found something down`
+              : undefined
+          }
+        >
+          {history ? `${history.uptime_percent}% working` : 'Nothing measured yet'}
         </span>
+        <span>Now</span>
       </div>
+
+      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{description}</p>
     </div>
   )
 }
@@ -360,6 +378,11 @@ export function SystemStatus() {
 
   const recorded = Boolean(status?.latest)
   const overall = recorded ? (status.overall ?? 'unknown') : deriveOverall(services)
+  const servicesNote = clientError
+    ? 'We could not check anything just now, so every row below shows no result.'
+    : recorded
+      ? 'Something listed as "not turned on" was never switched on for this site. It is not a problem.'
+      : 'Nothing has been measured yet, so this shows what one look right now can see.'
 
   return (
     <div className="min-h-screen bg-canvas">
@@ -386,9 +409,9 @@ export function SystemStatus() {
           <div className="space-y-1">
             <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">System status</h1>
             <p className="text-sm text-muted-foreground">
-              {recorded
-                ? 'Recorded by our own scheduler once a minute, from outside the service it checks.'
-                : 'Our scheduler records a check once a minute; until it has written one, the summary below is a live check made by your browser.'}
+              {clientError || recorded
+                ? 'We look at every part of Vulnix once a minute and keep the results for two weeks.'
+                : 'We look at every part of Vulnix once a minute. Nothing has been measured yet, so what you see below is one look happening right now.'}
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={poll} disabled={loading}>
@@ -422,27 +445,33 @@ export function SystemStatus() {
             </button>
           ))}
           <span className="ml-auto text-[11px] text-muted-foreground">
-            {status?.latest ? `Last recorded check ${formatTime(status.latest.checked_at)}` : 'No recorded check yet'}
+            {status?.latest ? `Updated ${formatTime(status.latest.checked_at)}` : 'Not updated yet'}
           </span>
         </div>
 
         {!clientError && (
           <div className="grid gap-3 sm:grid-cols-3">
             <Fact
-              label="Availability"
+              label="Working"
               value={
                 status?.uptime_percent == null
-                  ? 'Not recorded yet'
-                  : `${status.uptime_percent}% of checks`
+                  ? 'Nothing measured yet'
+                  : `${status.uptime_percent}% of the time`
               }
             />
             <Fact
-              label="Checks in window"
+              label="Checks taken"
               value={status?.total_checks ? `${status.total_checks}` : '0'}
             />
             <Fact
-              label="Response time"
-              value={status?.latest?.latency_ms != null ? `${status.latest.latency_ms} ms` : '—'}
+              label="How fast it answers"
+              value={
+                status?.latest?.latency_ms == null
+                  ? '—'
+                  : status.latest.latency_ms < 1000
+                    ? `${status.latest.latency_ms} ms`
+                    : `${(status.latest.latency_ms / 1000).toFixed(1)} seconds`
+              }
             />
           </div>
         )}
@@ -450,20 +479,16 @@ export function SystemStatus() {
         <HistoryStrip buckets={status?.buckets ?? []} windowKey={windowKey} />
 
         <section className="space-y-3">
-          <h2 className="text-base font-semibold text-foreground">Services</h2>
-          <p className="text-[11px] text-muted-foreground">
-            {!recorded
-              ? 'This deployment has written no recorded check yet, so this is one live check made by your browser.'
-              : 'A service listed as not enabled was never switched on for this deployment - it is not a failure.'}
-          </p>
+          <h2 className="text-base font-semibold text-foreground">What we look at</h2>
+          <p className="text-[11px] text-muted-foreground">{servicesNote}</p>
           {loading && !status ? (
-            <div className="space-y-3">
+            <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card shadow-xs">
               {COMPONENTS.map((c) => (
-                <div key={c.key} className="h-[112px] animate-pulse rounded-xl border border-border bg-card" />
+                <div key={c.key} className="h-[132px] animate-pulse" />
               ))}
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card shadow-xs">
               {COMPONENTS.map(({ key, label, Icon, description }) => (
                 <ServiceRow
                   key={key}
@@ -472,6 +497,8 @@ export function SystemStatus() {
                   description={description}
                   state={clientError && !services[key] ? 'unknown' : (services[key] ?? 'unknown')}
                   history={status?.services?.[key]}
+                  buckets={status?.buckets ?? []}
+                  windowKey={windowKey}
                 />
               ))}
             </div>
@@ -479,7 +506,7 @@ export function SystemStatus() {
         </section>
 
         <section className="space-y-3">
-          <h2 className="text-base font-semibold text-foreground">Recent incidents</h2>
+          <h2 className="text-base font-semibold text-foreground">Recent problems</h2>
           <Incidents incidents={status?.incidents ?? []} windowKey={windowKey} />
         </section>
       </main>

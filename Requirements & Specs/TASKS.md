@@ -287,7 +287,8 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
 - [x] Stop the page from calling a browser's blocked fetch an outage. `overall = error ? 'outage'` meant a
       content blocker on the visitor's machine (`net::ERR_BLOCKED_BY_CLIENT`) produced "Active service
       disruption" over a healthy API. The banner now reflects recorded observations; a failed status request
-      renders a neutral "This page could not load" panel instead.
+      renders a separate slate panel instead. That panel's wording was later changed by the owner to a downtime
+      notice - see the item below, which records what that costs.
 - [x] Give the top of the page the calm treatment asked for. Green panel when operational, amber - never red -
       when something is genuinely down, with copy that says "We're aware, and we're on it" rather than
       announcing a disaster, and rose reserved for the small history bars.
@@ -313,6 +314,28 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       and each row of the Services section renders its strip under the label. Worst state in a slice wins per
       service, `not_enabled` ranks below `operational`, and keys come from what the checks reported rather than
       a list kept on the server (ADR-029, point 7).
+- [x] Put those bars in the shape the owner drew. Each service is now one divider-separated line in a single
+      card - name left, state right, a full-width 32 px ribbon of 60 bars, and "<window> ago / <percent> working /
+      Now" beneath it - with the check and outage counts moved to a tooltip on the percentage. A service with
+      nothing recorded renders the full ribbon in `nodata` grey rather than a placeholder, so the shape is the
+      same before and after the first observation (ADR-029, point 8). The window stays 6h /
+      24h / 7d rather than the reference's 90 days, because retention is 14 days.
+- [x] Take the internal vocabulary off the page. Every visible string is written for a visitor now - no
+      scheduler, deployment, observation, probe, endpoint, worker, OAuth, incident, uptime or "operational" -
+      and the two lines that promised something untrue in the state showing them (history "shown below" after a
+      failed request; "nothing has been measured yet" when the page cannot tell) were removed rather than
+      softened (ADR-029, point 9).
+- [x] Rename one row and reword the failure panel, on instruction. `supabase_auth` is listed as
+      "Authentication" rather than "Sign-in" - the earlier label named the screen, the new one names the service.
+      The panel shown when the page's own status request fails now reads "We are experiencing downtime" with a
+      body about audits and sign-in, instead of "This page could not load" and a sentence blaming the visitor's
+      connection. **This partially gives back the guarantee of the first item in this section**: `clientError`
+      fires for an ad-blocked, offline or CORS-rejected fetch too, so a healthy Vulnix can tell a visitor it is
+      down. The behaviour is unchanged (no green banner, no invented state, rows labelled "Checking"), the rest
+      of the page still describes what was measured rather than asserting health, and ADR-029 point 5 records the
+      trade-off as accepted rather than hiding it. If the false alarm ever matters, the fix is one branch on
+      `navigator.onLine` / the response status, not a rewrite. It reaches a visitor only once both hosts build
+      from `dev` - see the deployment item below, which neither has done since `facfdc9`.
 - [ ] Bound the 7-day read before the cadence matters. Measured on a temp database at the retention limit:
       414 ms and 17 KB for 1,440 rows (24h), 411 ms and 17 KB for 10,080 rows (7 days) - the cost is fixed
       work, not row count, so it is tolerable for a page polled a minute apart and becomes a `GROUP BY` the
@@ -323,6 +346,13 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       is exactly the condition under which a missing worker and a missing beat process look identical from the
       console. Create (or redeploy) a service running
       `celery -A app.workers.celery_app.celery_app beat -l INFO` with the same env, then confirm a row appears.
+- [ ] Trigger both hosts to build from `dev`. Neither has picked up a commit since `facfdc9`: Pages still serves
+      `index-BSM327nQ.js` and the Render API still answers `/api/v1/status` without the `services` field, so the
+      status page cannot show what is already merged until each service deploys the current branch (or auto-deploy
+      is switched on). The same applies to the CORS fix in `b186854`, which is what blocks starting an audit from
+      the deployed console (task #95). To tell which commit a live bundle was built from, grep it for
+      `History for` - the aria-label the current rows use (it was `Recorded history for` until the ribbon
+      change, so a miss on the older string means nothing about a build made after it).
 - [x] Keep the scheduler as the only author of observations. Offered alternatives were letting the read path
       record one when the newest observation is stale (self-healing without a new service, but it puts an
       outbound fetch inside visitor requests and would revise ADR-029) or leaving the page in live-fallback
