@@ -208,8 +208,12 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       `pip install -e ".[dev,postgres]"`, ruff, pytest) and a `frontend` job (Node 22, `npm ci`, eslint,
       `vite build`, plus an assertion that `_redirects` and `_headers` reached `dist`). It needs no repository
       secret, because `tests/conftest.py` pins the environment the suite asserts on. `backend/pyproject.toml`
-      now excludes `migrations/` from ruff so the report describes authored code. First run not yet
-      observed. (ADR-026)
+      now excludes `migrations/` from ruff so the report describes authored code. Observed on the first run:
+      both jobs completed success on Linux at `1c906c3`. (ADR-026)
+- [ ] Cover the two Linux-only paths CI still does not reach. `sandbox_env()`'s non-`nt` branch runs only when
+      a real CLI executable is invoked and no test invokes one; `test_inspect_rejects_symlinks` asserts the
+      archive is rejected at inspection, so its symlink entry is never created on any platform. Both need
+      tests that actually extract, or actually run an adapter against a stubbed executable.
 - [ ] Make the backend `Lint` step blocking by clearing 9 ruff findings, 6 of them auto-fixable: 3 `F401`
       (`app/agent/code_agent.py:26`, `app/agent/dep_agent.py:12`, `app/main.py:110`), 3 `E501`
       (`app/agent/intel_agent.py:135`, `app/modules/auth/routes.py:600` and `:602`), 1 `UP035` and 1 `UP037`
@@ -234,6 +238,32 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       only variable names printed the key body, because the value is a multi-line PEM whose inner lines
       contain no `=`; nothing was committed and nothing left the machine, but the value is in that session's
       transcript and should be treated as exposed. The file itself is gitignored and stays put.
+
+## Requested 2026-10-28 — the deployed console reaches the deployed API
+
+- [x] Route the auth pages through the shared API base. `SignIn.jsx`, `SignUp.jsx`, `AuthCallback.jsx` and
+      `ForgotPassword.jsx` each declared `const API_BASE = '/api/v1'` and called `fetch()` with it, so on
+      Pages their requests landed on the static host and Cloudflare answered 405 to the POST. All four now
+      import `API_BASE_URL` from `src/lib/constants.js` (ADR-027). Email sign-in was never broken because it
+      goes through `src/services/api.js`, which already used the shared constant.
+- [ ] Set `VULNIX_CORS_ALLOW_ORIGINS=https://vulnix.aventorgo.xyz` in Render, at the `vulnix-backend` group
+      level so all three services inherit it, and re-run the preflight until `OPTIONS /api/v1/workspaces`
+      answers 200 with `access-control-allow-origin`. It was still empty on 2026-10-28: the same probe
+      returned 405 with no CORS headers at all, which is the no-middleware signature rather than a refused
+      origin. This is now a hard prerequisite for sign-in, not a nicety, because the auth calls are
+      genuinely cross-origin.
+- [ ] Turn on Google in Supabase. `POST /auth/oauth/init` only builds
+      `{supabase_url}/auth/v1/authorize?provider=google&redirect_to=...` (`app/modules/auth/routes.py:281`),
+      so the provider and its OAuth credentials live in the Supabase project, not in this repository, and the
+      redirect target `${window.location.origin}/auth/callback` must be in Supabase's allowed list.
+- [ ] Give Pages the branch-preview story, or record that it does not have one. `redirect_uri` is built from
+      `window.location.origin`, so a Preview deploy asks Supabase for a `*-*.pages.dev` target that the
+      project will refuse unless each is allowlisted.
+- [ ] Implement `POST /auth/forgot-password`. No such route exists anywhere in `app/`, and until this change
+      the page never reached the server, so its success toast was cosmetic. It now calls a real API and will
+      show a real error - which is the honest state, not the finished one.
+- [ ] Sign in with GitHub and with Google in a browser against the deployed pair, and record what the
+      callback page does with the code. Nothing in this change has been exercised beyond a build.
 
 ## Working agreement
 Do not start the next phase merely because the previous phase's code exists. Confirm tests, acceptance criteria, security review, and documentation updates first.

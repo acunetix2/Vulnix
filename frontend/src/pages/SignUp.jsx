@@ -27,8 +27,7 @@ import { FloatingHelp } from '../components/app/FloatingHelp'
 import { VulnixFooter } from '../components/app/VulnixFooter'
 import { VulnixLegalGraphicBanner } from './landing/legal/VulnixLegalGraphicBanner'
 import { AuthTypewriterHeadline } from '../components/app/AuthTypewriterHeadline'
-
-const API_BASE = '/api/v1'
+import { API_BASE_URL } from '../lib/constants'
 const SHOW_LEGACY_AUTH_SHOWCASE = false
 const SIGNUP_HEADLINES = ['Find risk early.', 'Understand every finding.', 'Fix issues sooner.']
 
@@ -118,7 +117,7 @@ export function SignUp() {
     try {
       const redirectUri = `${window.location.origin}/auth/callback`
 
-      const response = await fetch(`${API_BASE}/auth/oauth/init`, {
+      const response = await fetch(`${API_BASE_URL}/auth/oauth/init`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -61,8 +61,8 @@
 
 ## In progress
 - [ ] Make the two CI `Lint` steps blocking, once 9 ruff findings and 39 eslint errors are gone (TASKS.md).
-- [ ] Observe the first CI run: it executes the suite on Linux, where the `sandbox_env` non-`nt` branch and
-      the symlink archive tests have never been exercised.
+- [ ] Cover the two Linux-only paths the suite still does not reach: `sandbox_env()`'s non-`nt` branch, and
+      extraction of an archive that actually contains a symlink entry (TASKS.md, ADR-026 consequence).
 - [ ] OAuth connect UI: Connect/Disconnect buttons in place of every pasted token, the channel/site/
       project/repository pickers, the one-time webhook secret reveal, and `/app/integrations/github`.
 - [ ] Daily credits heatmap on the AI usage ledger.
@@ -645,12 +645,53 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
 - Deliberately not run locally: `npm ci`. It deletes `node_modules` before reinstalling, and the owner's dev
   server is live on `:5173` from that directory. The lockfile is committed and `npx vite build` plus
   `npx eslint .` both pass against it, but `npm ci` itself is first exercised by CI.
-- Not verified, stated plainly: no workflow run has been observed. Whether Actions is enabled for the
-  repository is not checkable from this machine, the Linux run resolves a dependency set this venv has never
-  had, and it executes two code paths that have never run anywhere — `sandbox_env()`'s non-`nt` branch at
-  `app/scanning/adapters/base.py:134`, and ZIP symlink entries at extraction time on a host that can actually
-  create them. A first run that comes back red is information about Linux, not CI being broken.
+- Not verified, stated plainly: whether Actions is enabled for the repository was unknown when the file was
+  written, and the Linux run resolves a dependency set this venv has never had. The first run then executed
+  and both jobs passed - see the log below - but it did not prove the two Linux-only paths, because the suite
+  does not exercise `sandbox_env()`'s non-`nt` branch at `app/scanning/adapters/base.py:134` unless a CLI tool
+  is asked for, and `tests/unit/test_archive.py` asserts the archive is *rejected* before extraction, so the
+  symlink it carries is never created on either platform.
+- Observed afterwards, from the first real run (workflow run 40650579036, commit `1c906c3`, event `push`):
+  **both jobs completed with conclusion `success`** — `Backend (ruff, pytest)` across 9 steps and
+  `Frontend (eslint, build)` across 10, on `ubuntu-latest`. So Python 3.14 and Node 22 install from
+  `pyproject.toml` and the lockfile on Linux, the 375-test suite is not Windows-only, `npm ci` works from the
+  committed lockfile, the production build succeeds, and the `_redirects` / `_headers` assertion held. The
+  two lint steps reported their findings as annotations without failing, which is the behaviour intended.
 - Caution for the owner, recorded without the value: a shell command meant to list only the variable *names*
   in `backend/.env` printed the GitHub App private key body, because that value is a multi-line PEM and its
   inner lines contain no `=`. Nothing was committed, nothing left the machine, and the file stays gitignored,
   but the key should be treated as exposed to that session's transcript. Rotation is a row in TASKS.md.
+
+## Verification log (2026-10-28, the auth pages now use the deployed API origin)
+
+- Evidence came from the live host, not from the source alone: `curl` of
+  `https://vulnix.aventorgo.xyz/assets/index-DCId1DlN.js` returned 2,539,524 bytes and contained
+  `https://vulnix-iry7.onrender.com/api/v1` exactly once, in `constants.js`. So `VITE_API_BASE_URL` was set with
+  the correct case and a rebuild had happened; the failing requests were not an env-var problem. The minified
+  call sites read `fetch(`${ose}/auth/oauth/init`)` against a base that was the relative literal, which is the
+  four local `const API_BASE = '/api/v1'` declarations.
+- The split the operator reported is what the code predicts: email sign-in calls `api.login()` in
+  `src/services/api.js`, which imports `API_BASE_URL`, and therefore crossed origins correctly; the provider
+  buttons call `fetch` themselves with the page-local constant and were answered 405 by Pages, where a POST to
+  a non-existent static path never reaches the `/* /index.html 200` fallback.
+- `npx eslint` on the four changed pages exits 0. A grep for the bare `API_BASE` identifier across `src/`
+  returns nothing, so no call site kept the old name. `npm run build` succeeded in 4.55 s and `dist/_redirects`
+  and `dist/_headers` are present at the output root after the rebuild. The local build has
+  `VITE_API_BASE_URL` unset by design, so it resolves to `/api/v1` and is not evidence about the deployed host.
+- Every endpoint the callback page POSTs to after this change was confirmed to exist in
+  `app/modules/auth/routes.py`: `confirm-token` (222), `confirm` (186), `oauth/callback` (324), `oauth/init`
+  (281). `forgot-password` does not exist anywhere in `app/` - a grep for it returns nothing - so the password
+  reset page will now report a real failure where it previously reported a success it had not earned. That is
+  recorded as a task, not as a regression.
+- Still true on the deployed API as of this writing, from `/api/v1/ready`: `database: up`, `redis: down`,
+  `supabase_auth: configured`, all three reviewer slots configured. The Redis line is the queue: the API
+  service was created by hand rather than from `render.yaml`, so none of the blueprint's `fromService`
+  injection or group defaults reached it, which is also why it booted on the sqlite and eager defaults. Two
+  variables have to be set in the dashboard for that service - `VULNIX_CELERY_BROKER_URL` with the internal
+  `redis://red-...:6379` string, and `VULNIX_CELERY_EAGER=false` - and a worker process has to consume the
+  queue, or an enqueued audit sits there with nothing running it.
+- Not verified, stated plainly: no sign-in has been attempted in a browser against the deployed pair, no Pages
+  redeploy has run since this change, `VULNIX_CORS_ALLOW_ORIGINS` is still empty on the API (an `OPTIONS`
+  preflight with `Origin: https://vulnix.aventorgo.xyz` returned 405 with zero `access-control-*` headers, both
+  before and after this change), and Google is not known to be enabled in the Supabase project. The 405 is
+  fixed; the next error after it will be CORS, and that is the operator's setting to make.
