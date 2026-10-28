@@ -781,3 +781,70 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
   production Postgres, the API and scheduler have not redeployed onto this code, and no real outage has ever
   been rendered with the amber banner. Until all four hold the deployed page shows the single-check fallback -
   honest, but not the history the owner asked for.
+
+## Verification log (2026-10-28, the deployed status page showed nothing)
+
+- Read from production, not inferred: `GET /api/v1/status` returns 200 with
+  `probing_enabled: true`, `latest: null`, `overall: "unknown"`, `total_checks: 0` and all 60 buckets
+  `nodata`, while `GET /api/v1/ready` returns 200 in 1.44s with `database=up, redis=up,
+  supabase_auth=configured, ai=enabled, ai_fallback=enabled, integrations=enabled`.
+- Two separate causes, and only one of them is code.
+  1. Nothing has ever written a row. The read path proves the table exists - the 24h query returned rows-shaped
+     JSON rather than a database error - and the API has the probe origin set, so the missing piece is the
+     process that runs the schedule. There is no evidence a `vulnix-scheduler` service exists on the dashboard;
+     audits have been running inline under `VULNIX_CELERY_EAGER=true` (ADR-024), which is exactly the condition
+     under which a missing worker and a missing beat process look identical from the console.
+  2. The page had no way to show anything while that was true. It gated its live fallback on
+     `probing_enabled`, which is a statement about configuration, not about data: with probing configured and
+     zero observations it suppressed the fallback and rendered "Setting up the checks" with no service state at
+     all. The gate is now `Boolean(status.latest)` - the actual absence of a recorded row - so the summary, the
+     banner and the Services caption switch to the browser's own check and say so in three places.
+- The derived banner was checked against the live payload, not assumed: every component `/ready` reports maps
+  through `readLiveState()` to `operational`, so `deriveOverall()` returns `operational` and the page renders
+  the green panel. `deriveOverall()` mirrors `overall_state()` on the server (database down is an outage, any
+  other down or degraded value is degraded, otherwise operational) rather than inventing a second rule.
+- Verification: `npx eslint src/pages/landing/resources/SystemStatus.jsx` exits 0 and `vite build` succeeds
+  (the pre-existing chunk-size advisory is the only warning). No backend change, so the 393-test suite result
+  above still stands. Not yet verified: the deployed page - Pages has to rebuild from this commit first.
+
+## Verification log (2026-10-28, every metric asked for its own bars)
+
+- Request: not one history strip for the system, but one per service. The stored rows already carry a
+  per-observation component map, so this is aggregation, not new data. `summary()` gained a `services` object:
+  per reported key, a 60-slice `bars` array using the same window grid, plus `checks`, `outage_checks` and
+  `uptime_percent`. Worst state in a slice wins per service; `not_enabled` ranks *below* `operational`, so a
+  slice mixing "never switched on" with "working" reads as working; a slice no check covered stays `nodata`; an
+  unrecognised word ranks with `degraded`, the same judgement `overall_state()` makes. Keys come from the
+  observations rather than a list kept in the server, so a service added to `/ready` appears without a change
+  here. The row's current state still comes from `components` (the latest observation), so "what is true now"
+  has one source and "what happened over the window" another.
+- Tests: `tests/unit/test_status.py` now **21 passed** - five new ones covering one row per reported service
+  with the right slice indices and `nodata` elsewhere, a service offering no history for a slice nobody checked
+  (`6h` window, one row), the worst state inside a slice with its own count and 50.0% uptime, an unrecognised
+  answer counted as a problem rather than a gap, and the public endpoint returning `services: {}` before the
+  first observation. `test_status.py` and `test_cors.py` together: **27 passed**. `ruff check` and
+  `ruff format --check` pass on the changed files. The full suite was still executing when this was committed;
+  its number is recorded in the log above rather than assumed here.
+- Rendered, not assumed. A throwaway SQLite database (created, seeded with 1,440 one-minute observations across
+  24 hours containing a redis-down stretch, an `ai=disabled` stretch, an unreachable stretch, a database-down
+  stretch and an `integrations=not_configured` stretch, then deleted along with the temp directory) was served
+  by a temporary API on port 8732 with the console previewed on 5301. The in-app browser's viewport was
+  unavailable, so no pixels were inspected - the DOM was queried instead, which is structural evidence, not
+  visual: all six rows rendered `[aria-label^="Recorded history for"]` with exactly 60 bar children each,
+  Database and Queue carried both `bg-emerald-500` and `bg-rose-400` (their seeded outages), the other four
+  only `bg-emerald-500`, the caption read "99.79% of 1436 checks", and Recent incidents listed the two seeded
+  outages with their resolution times. `npx eslint` exits 0 and `vite build` succeeds.
+- Why no grey appeared for the off stretches, checked rather than waved away: each 24-hour slice holds 24
+  one-minute observations, so an eight-minute `disabled` run shares its slice with healthy ones, and working
+  outranks never-switched-on by design. A slice that is off for its entire span does render `not_enabled`, and
+  that case is covered by `test_every_service_the_checks_named_has_its_own_row_of_bars`, which asserts
+  `bars[58] == "not_enabled"` against a sparser window.
+- Recorded debt from the same reading, measured rather than estimated: against a temp SQLite seeded to the
+  retention limit, one request cost **414 ms and 17,167 bytes at 1,440 rows (24h)** and **411 ms and 17,238
+  bytes at 10,080 rows (7 days)** with ten services. So the cost is dominated by fixed work, not row count -
+  0.4s per read is tolerable for a page polled a minute apart and rate-limited to 30/min per client, but it is
+  a `GROUP BY` away from being cheap and should become one if the cadence or the window grows.
+- Deployment observation worth keeping: Pages served `index-BSM327nQ.js` for the commit before this one and it
+  carries the status feature, so builds from `dev` do land. Twenty minutes after `1b9fdd9` the fallback fix had
+  not appeared, and the response carried `cf-cache-status: DYNAMIC` with `max-age=0, must-revalidate`, so the
+  delay is a pending build, not edge cache.

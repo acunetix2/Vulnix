@@ -55,6 +55,16 @@ function readLiveState(value) {
   return 'degraded'
 }
 
+// Mirrors overall_state() on the server: the database carries everything, so it
+// being down is an outage; the queue only delays work, so it degrades.
+function deriveOverall(states) {
+  const values = Object.values(states)
+  if (!values.length) return 'unknown'
+  if (states.database === 'outage') return 'outage'
+  if (values.some((state) => state === 'outage' || state === 'degraded')) return 'degraded'
+  return 'operational'
+}
+
 function formatTime(iso) {
   if (!iso) return ''
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -105,7 +115,7 @@ function headlineFor(overall, incident) {
   }
 }
 
-function Banner({ status, clientError, loading }) {
+function Banner({ status, overall, recorded, clientError, loading }) {
   if (clientError) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 shadow-sm sm:p-8">
@@ -135,7 +145,6 @@ function Banner({ status, clientError, loading }) {
     )
   }
 
-  const overall = status?.overall ?? 'unknown'
   const copy = headlineFor(overall, status?.incidents?.at(-1))
   const accent = STATE[overall] ?? STATE.unknown
 
@@ -166,6 +175,12 @@ function Banner({ status, clientError, loading }) {
           <div>
             <h2 className="text-xl font-bold text-foreground sm:text-2xl">{copy.title}</h2>
             <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">{copy.body}</p>
+            {!recorded && overall !== 'unknown' && (
+              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                This is one live check made by your browser, not a recorded history. Rows appear once the
+                scheduler writes its first observation.
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -244,22 +259,43 @@ function Incidents({ incidents, windowKey }) {
   )
 }
 
-function ServiceRow({ label, Icon, description, state }) {
+function ServiceRow({ label, Icon, description, state, history }) {
   const meta = STATE[state] ?? STATE.unknown
+  const bars = history?.bars ?? []
   return (
-    <div className="flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-xs">
-      <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted/60')}>
-        <Icon className={cn('size-5', meta.text)} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-sm font-semibold text-foreground">{label}</span>
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className={cn('size-2 rounded-full', meta.dot)} />
-            {meta.label}
-          </span>
+    <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
+      <div className="flex items-center gap-4">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted/60">
+          <Icon className={cn('size-5', meta.text)} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-semibold text-foreground">{label}</span>
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className={cn('size-2 rounded-full', meta.dot)} />
+              {meta.label}
+            </span>
+          </div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
         </div>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        {bars.length ? (
+          <div
+            className="flex h-6 flex-1 items-stretch gap-[2px]"
+            role="img"
+            aria-label={`Recorded history for ${label}`}
+          >
+            {bars.map((bar, index) => (
+              <span key={index} className={cn('flex-1 rounded-[2px]', (STATE[bar] ?? STATE.nodata).bar)} />
+            ))}
+          </div>
+        ) : (
+          <div className="h-6 flex-1 rounded-[3px] border border-dashed border-border bg-muted/40" />
+        )}
+        <span className="shrink-0 text-[11px] whitespace-nowrap text-muted-foreground">
+          {history ? `${history.uptime_percent}% of ${history.checks} checks` : 'Nothing recorded for this service yet'}
+        </span>
       </div>
     </div>
   )
@@ -288,9 +324,9 @@ export function SystemStatus() {
       if (!response.ok) throw new Error(`Status service returned ${response.status}.`)
       const body = await response.json()
       setStatus(body)
-      // Without a recorded history the page still answers for itself, from a
-      // single live readiness check, and says which one it is showing.
-      if (body.probing_enabled) {
+      // Until the scheduler has written its first observation the page answers for
+      // itself, from one live readiness check, and says which one it is showing.
+      if (body.latest) {
         setLive(null)
       } else {
         const ready = await fetch(READY_URL, { cache: 'no-store' })
@@ -322,6 +358,9 @@ export function SystemStatus() {
     )
   }, [status, live])
 
+  const recorded = Boolean(status?.latest)
+  const overall = recorded ? (status.overall ?? 'unknown') : deriveOverall(services)
+
   return (
     <div className="min-h-screen bg-canvas">
       <header className="sticky top-0 z-50 h-16 border-b border-border/80 bg-background/90 backdrop-blur-md">
@@ -347,7 +386,9 @@ export function SystemStatus() {
           <div className="space-y-1">
             <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">System status</h1>
             <p className="text-sm text-muted-foreground">
-              Recorded by our own scheduler once a minute, from outside the service it checks.
+              {recorded
+                ? 'Recorded by our own scheduler once a minute, from outside the service it checks.'
+                : 'Our scheduler records a check once a minute; until it has written one, the summary below is a live check made by your browser.'}
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={poll} disabled={loading}>
@@ -356,7 +397,13 @@ export function SystemStatus() {
           </Button>
         </div>
 
-        <Banner status={status} clientError={clientError} loading={loading} />
+        <Banner
+          status={status}
+          overall={overall}
+          recorded={recorded}
+          clientError={clientError}
+          loading={loading}
+        />
 
         <div className="flex flex-wrap items-center gap-2">
           {WINDOWS.map((option) => (
@@ -405,14 +452,14 @@ export function SystemStatus() {
         <section className="space-y-3">
           <h2 className="text-base font-semibold text-foreground">Services</h2>
           <p className="text-[11px] text-muted-foreground">
-            {status && !status.probing_enabled
-              ? 'This deployment has no recorded history yet, so this is one live check made by your browser.'
+            {!recorded
+              ? 'This deployment has written no recorded check yet, so this is one live check made by your browser.'
               : 'A service listed as not enabled was never switched on for this deployment - it is not a failure.'}
           </p>
           {loading && !status ? (
             <div className="space-y-3">
               {COMPONENTS.map((c) => (
-                <div key={c.key} className="h-[76px] animate-pulse rounded-xl border border-border bg-card" />
+                <div key={c.key} className="h-[112px] animate-pulse rounded-xl border border-border bg-card" />
               ))}
             </div>
           ) : (
@@ -424,6 +471,7 @@ export function SystemStatus() {
                   Icon={Icon}
                   description={description}
                   state={clientError && !services[key] ? 'unknown' : (services[key] ?? 'unknown')}
+                  history={status?.services?.[key]}
                 />
               ))}
             </div>

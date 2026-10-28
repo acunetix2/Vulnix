@@ -301,12 +301,32 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       incidents, uptime percentage and the latest check, rate-limited 30/min by client IP;
       `POST /api/v1/status/probe` is authenticated. `SystemStatus.jsx` polls the one endpoint once a minute and
       falls back to a single labelled live check when probing is not configured.
-- [ ] Set `VULNIX_STATUS_PROBE_URL` on Render (the env group in `render.yaml` now declares it as `sync: false`)
-      and apply the migration, then confirm the deployed page fills in. Until both hold, history is empty by
-      design and the page says so - which is the honest state, not the finished one.
-- [ ] Redeploy both the API and the scheduler. A `status_probes` insert against a missing table, or a Beat
-      process that never restarted onto the new schedule, each leave the page in fallback with no error
-      anywhere a person would look.
+- [x] Fix the fallback gate, which shipped wrong. It keyed on `probing_enabled` - a statement about
+      configuration - so a deployment with the origin set and no rows yet suppressed its own live check and
+      rendered "Setting up the checks" with no service state. It now keys on the absence of `status.latest` and
+      labels the live check in three places, with `deriveOverall()` mirroring the server's rules rather than
+      inventing a second judgement.
+- [x] Set `VULNIX_STATUS_PROBE_URL` on the deployed API and get the migration applied. Both hold now: the live
+      `GET /api/v1/status` returns `probing_enabled: true` and its 24-hour query reads the table without error.
+- [x] Give every metric its own bars, not just the system as a whole. `summary()` now returns a `services`
+      map - one 60-slice history per component, with its own check count, outage count and uptime percentage -
+      and each row of the Services section renders its strip under the label. Worst state in a slice wins per
+      service, `not_enabled` ranks below `operational`, and keys come from what the checks reported rather than
+      a list kept on the server (ADR-029, point 7).
+- [ ] Bound the 7-day read before the cadence matters. Measured on a temp database at the retention limit:
+      414 ms and 17 KB for 1,440 rows (24h), 411 ms and 17 KB for 10,080 rows (7 days) - the cost is fixed
+      work, not row count, so it is tolerable for a page polled a minute apart and becomes a `GROUP BY` the
+      moment the window or the cadence grows.
+- [ ] Get something to actually run the schedule. Production has `total_checks: 0` with a configured origin, so
+      no Beat process has executed `vulnix.probe_status` - there is no evidence a scheduler service exists on
+      the Render dashboard at all, and audits have been running inline under `VULNIX_CELERY_EAGER=true`, which
+      is exactly the condition under which a missing worker and a missing beat process look identical from the
+      console. Create (or redeploy) a service running
+      `celery -A app.workers.celery_app.celery_app beat -l INFO` with the same env, then confirm a row appears.
+- [x] Keep the scheduler as the only author of observations. Offered alternatives were letting the read path
+      record one when the newest observation is stale (self-healing without a new service, but it puts an
+      outbound fetch inside visitor requests and would revise ADR-029) or leaving the page in live-fallback
+      permanently. Chosen: ADR-029 stands unchanged, and a scheduler service gets created.
 - [ ] Check the copy against a real outage once probing runs. Every message on the page has only ever been
       exercised against fake rows in tests; the amber banner has not been seen with production data behind it.
 - [ ] Decide whether the probe should measure from outside the platform. Today the scheduler probes its own

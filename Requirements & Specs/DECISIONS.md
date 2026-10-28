@@ -414,7 +414,8 @@ Record material decisions here. Do not silently change a decision that affects d
   deployed API.
 
 ## ADR-029 — Status history is probed by the scheduler and read publicly
-- **Status:** Accepted
+- **Status:** Accepted, revised the same day (the fallback gate keys on recorded data rather than
+  configuration, and every service now carries its own row of bars - see points 6 and 7)
 - **Context:** The public status page inferred the whole banner from one fetch made by the visitor's browser:
   `overall = error ? 'outage' : …`. On the deployed pair that fetch was blocked by a browser content blocker
   (`net::ERR_BLOCKED_BY_CLIENT`) and, at other moments, by Render's cold-start connection close, so the page
@@ -446,7 +447,17 @@ Record material decisions here. Do not silently change a decision that affects d
      browser, never as an outage.
   6. Nothing is recorded until `VULNIX_STATUS_PROBE_URL` names an origin, and the endpoint says so
      (`probing_enabled: false`) instead of showing an empty graph as a perfect month. The task returns 0, not
-     an error, so an unconfigured scheduler still reports clean runs.
+     an error, so an unconfigured scheduler still reports clean runs. The page's live-check fallback is gated on
+     the *absence of a recorded observation*, not on `probing_enabled`: the first attempt shipped the config
+     flag as the condition, so a deployment with the origin set and no rows yet displayed nothing at all.
+  7. **Every service carries its own row of bars**, not only the system as a whole. The stored component map is
+     already per-observation, so the same 60-slice grid is aggregated per key: the worst state inside a slice
+     wins, `not_enabled` ranks below `operational` (a slice that mixes "never switched on" with "working" is
+     reported as working, because working is the stronger fact), and a slice no check covered is `nodata`. Keys
+     come from the observations rather than a list kept in the server, so a service added to `/ready` appears
+     without a change here, and each row carries its own check count and percentage alongside the bars. The
+     current state of a service still comes from the latest row, so there is exactly one source for "what is
+     true now" and a separate one for "what happened over the window".
 - **Alternatives considered:** browser-derived history (rejected - it is exactly the current bug, and it makes
   the page's truth depend on the visitor's ad blocker, network and tab focus); an external status vendor such
   as Better Stack or Instatus (rejected for now - it means a second paid service, a second page to keep in
