@@ -308,6 +308,15 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       inventing a second judgement.
 - [x] Set `VULNIX_STATUS_PROBE_URL` on the deployed API and get the migration applied. Both hold now: the live
       `GET /api/v1/status` returns `probing_enabled: true` and its 24-hour query reads the table without error.
+- [x] Give every metric its own bars, not just the system as a whole. `summary()` now returns a `services`
+      map - one 60-slice history per component, with its own check count, outage count and uptime percentage -
+      and each row of the Services section renders its strip under the label. Worst state in a slice wins per
+      service, `not_enabled` ranks below `operational`, and keys come from what the checks reported rather than
+      a list kept on the server (ADR-029, point 7).
+- [ ] Bound the 7-day read before the cadence matters. Measured on a temp database at the retention limit:
+      414 ms and 17 KB for 1,440 rows (24h), 411 ms and 17 KB for 10,080 rows (7 days) - the cost is fixed
+      work, not row count, so it is tolerable for a page polled a minute apart and becomes a `GROUP BY` the
+      moment the window or the cadence grows.
 - [ ] Get something to actually run the schedule. Production has `total_checks: 0` with a configured origin, so
       no Beat process has executed `vulnix.probe_status` - there is no evidence a scheduler service exists on
       the Render dashboard at all, and audits have been running inline under `VULNIX_CELERY_EAGER=true`, which

@@ -259,22 +259,43 @@ function Incidents({ incidents, windowKey }) {
   )
 }
 
-function ServiceRow({ label, Icon, description, state }) {
+function ServiceRow({ label, Icon, description, state, history }) {
   const meta = STATE[state] ?? STATE.unknown
+  const bars = history?.bars ?? []
   return (
-    <div className="flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-xs">
-      <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted/60')}>
-        <Icon className={cn('size-5', meta.text)} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-sm font-semibold text-foreground">{label}</span>
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className={cn('size-2 rounded-full', meta.dot)} />
-            {meta.label}
-          </span>
+    <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
+      <div className="flex items-center gap-4">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted/60">
+          <Icon className={cn('size-5', meta.text)} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-semibold text-foreground">{label}</span>
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className={cn('size-2 rounded-full', meta.dot)} />
+              {meta.label}
+            </span>
+          </div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
         </div>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        {bars.length ? (
+          <div
+            className="flex h-6 flex-1 items-stretch gap-[2px]"
+            role="img"
+            aria-label={`Recorded history for ${label}`}
+          >
+            {bars.map((bar, index) => (
+              <span key={index} className={cn('flex-1 rounded-[2px]', (STATE[bar] ?? STATE.nodata).bar)} />
+            ))}
+          </div>
+        ) : (
+          <div className="h-6 flex-1 rounded-[3px] border border-dashed border-border bg-muted/40" />
+        )}
+        <span className="shrink-0 text-[11px] whitespace-nowrap text-muted-foreground">
+          {history ? `${history.uptime_percent}% of ${history.checks} checks` : 'Nothing recorded for this service yet'}
+        </span>
       </div>
     </div>
   )
@@ -438,7 +459,7 @@ export function SystemStatus() {
           {loading && !status ? (
             <div className="space-y-3">
               {COMPONENTS.map((c) => (
-                <div key={c.key} className="h-[76px] animate-pulse rounded-xl border border-border bg-card" />
+                <div key={c.key} className="h-[112px] animate-pulse rounded-xl border border-border bg-card" />
               ))}
             </div>
           ) : (
@@ -450,6 +471,7 @@ export function SystemStatus() {
                   Icon={Icon}
                   description={description}
                   state={clientError && !services[key] ? 'unknown' : (services[key] ?? 'unknown')}
+                  history={status?.services?.[key]}
                 />
               ))}
             </div>

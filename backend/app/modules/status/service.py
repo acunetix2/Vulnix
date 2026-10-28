@@ -38,6 +38,13 @@ _DEAD = {"down"}
 _RANK = {"operational": 0, "degraded": 1, "outage": 2}
 _BY_RANK = {value: name for name, value in _RANK.items()}
 
+# A per-service bar reports what the service did during a slice, not what it was
+# configured to do: a slice mixing "never switched on" with "working" is reported
+# as working, because working is the stronger fact. Anything unrecognised ranks
+# with degraded, the same judgement overall_state() makes.
+_SERVICE_RANK = {"not_enabled": 0, "operational": 1, "degraded": 2, "outage": 3}
+_SERVICE_BY_RANK = {value: name for name, value in _SERVICE_RANK.items()}
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -203,6 +210,44 @@ def _incidents(rows: list[StatusProbe]) -> list[dict]:
     ]
 
 
+def _bucket_index(when: datetime, since: datetime, span: float) -> int:
+    """Which slice of the window an observation falls in, clamped to the grid."""
+    offset = (_aware(when) - since).total_seconds()
+    return min(max(int(offset // span), 0), BUCKET_COUNT - 1)
+
+
+def _service_history(rows: list[StatusProbe], since: datetime, span: float) -> dict[str, dict]:
+    """One row of bars per service the checks actually reported.
+
+    Keys come from the observations rather than a list kept here, so a service
+    added to the readiness endpoint appears without a change in this module. The
+    page renders the handful it has copy for and ignores the rest.
+    """
+    slots: dict[str, list[int]] = {}
+    checks: dict[str, int] = {}
+    outages: dict[str, int] = {}
+
+    for row in rows:
+        index = _bucket_index(row.checked_at, since, span)
+        for key, value in (row.components or {}).items():
+            state = component_state(value)
+            ranks = slots.setdefault(key, [-1] * BUCKET_COUNT)
+            ranks[index] = max(ranks[index], _SERVICE_RANK.get(state, 2))
+            checks[key] = checks.get(key, 0) + 1
+            if state == "outage":
+                outages[key] = outages.get(key, 0) + 1
+
+    return {
+        key: {
+            "bars": [_SERVICE_BY_RANK[rank] if rank >= 0 else "nodata" for rank in ranks],
+            "checks": checks[key],
+            "outage_checks": outages.get(key, 0),
+            "uptime_percent": round(100 * (checks[key] - outages.get(key, 0)) / checks[key], 2),
+        }
+        for key, ranks in slots.items()
+    }
+
+
 def summary(db: Session, window: str = DEFAULT_WINDOW) -> dict:
     """The newest observation, plus one bucket per slice of the window."""
     if window not in WINDOWS:
@@ -232,8 +277,7 @@ def summary(db: Session, window: str = DEFAULT_WINDOW) -> dict:
         for index in range(BUCKET_COUNT)
     ]
     for row in rows:
-        offset = (_aware(row.checked_at) - since).total_seconds()
-        bucket = buckets[min(max(int(offset // span), 0), BUCKET_COUNT - 1)]
+        bucket = buckets[_bucket_index(row.checked_at, since, span)]
         state = overall_state(row.reachable, row.components)
         bucket["probes"] += 1
         if state == "outage":
@@ -256,6 +300,7 @@ def summary(db: Session, window: str = DEFAULT_WINDOW) -> dict:
         "latest": _as_dict(latest) if latest else None,
         "overall": overall_state(latest.reachable, components) if latest else "unknown",
         "components": {key: component_state(value) for key, value in components.items()},
+        "services": _service_history(rows, since, span),
         "buckets": buckets,
         "incidents": _incidents(rows),
         "total_checks": len(rows),

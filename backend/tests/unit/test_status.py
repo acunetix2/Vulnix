@@ -233,3 +233,56 @@ def test_the_probe_endpoint_answers_only_to_the_operator(client, monkeypatch) ->
 
     assert response.status_code == 412
     assert response.json()["error"]["code"] == "STATUS_PROBE_NOT_CONFIGURED"
+
+
+# ── one bar per service, not one for everything ───────────────────────────────
+
+
+def test_every_service_the_checks_named_has_its_own_row_of_bars(db) -> None:
+    _record(db, components=_ready(ai="disabled"), minutes_ago=40)
+    _record(db, components=_ready(ai="enabled"))
+
+    services = service.summary(db)["services"]
+
+    bars = services["ai"]["bars"]
+    assert len(bars) == service.BUCKET_COUNT
+    assert bars[58] == "not_enabled"
+    assert bars[59] == "operational"
+    assert bars.count("nodata") == service.BUCKET_COUNT - 2
+    assert set(services) == set(_ready())
+
+
+def test_a_service_offers_no_history_for_a_slice_nobody_checked(db) -> None:
+    _record(db)
+
+    summary = service.summary(db, window="6h")
+
+    assert summary["services"]["database"]["bars"].count("nodata") == service.BUCKET_COUNT - 1
+    assert summary["services"]["database"]["checks"] == 1
+
+
+def test_a_service_bar_reports_the_worst_state_inside_its_slice(db) -> None:
+    _record(db, components=_ready(redis="down"), minutes_ago=1)
+    _record(db)
+
+    redis = service.summary(db)["services"]["redis"]
+
+    assert redis["bars"][-1] == "outage"
+    assert redis["checks"] == 2
+    assert redis["outage_checks"] == 1
+    assert redis["uptime_percent"] == 50.0
+
+
+def test_an_unrecognised_answer_is_counted_as_a_problem_not_a_gap(db) -> None:
+    _record(db, components=_ready(database="mysterious"))
+
+    bars = service.summary(db)["services"]["database"]["bars"]
+
+    assert bars[-1] == "degraded"
+
+
+def test_the_public_history_carries_the_service_rows(client) -> None:
+    response = client.get("/api/v1/status")
+
+    assert response.status_code == 200
+    assert response.json()["services"] == {}
