@@ -29,6 +29,9 @@ os.environ["VULNIX_AI_ENABLED"] = "false"
 # for real.
 os.environ["VULNIX_INTEGRATIONS_ENABLED"] = "false"
 os.environ["VULNIX_INTEGRATION_SECRET_KEY"] = "test-integration-secret"
+# No origin to probe: a developer's .env that names one would make the status
+# tests report recorded history for a test run that recorded none.
+os.environ["VULNIX_STATUS_PROBE_URL"] = ""
 
 
 def _make_zip(files: dict[str, bytes], symlinks: tuple[str, str] = ()) -> bytes:

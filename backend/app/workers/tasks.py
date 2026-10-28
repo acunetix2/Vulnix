@@ -35,6 +35,29 @@ def drain_integration_outbox_task(limit: int = 50) -> int:
         db.close()
 
 
+def probe_status_task() -> int:
+    """Record one check of the public API for the status page.
+
+    Returns 0 when this deployment has named no origin. A scheduler with nothing
+    to probe should report a clean run every minute, not a failing task.
+    """
+    from app.core.errors import AppError
+    from app.db.session import SessionLocal
+    from app.modules.status.service import probe
+
+    db = SessionLocal()
+    try:
+        try:
+            probe(db)
+        except AppError as exc:
+            if exc.code == "STATUS_PROBE_NOT_CONFIGURED":
+                return 0
+            raise
+        return 1
+    finally:
+        db.close()
+
+
 try:
     from app.workers.celery_app import celery_app
 
@@ -49,5 +72,9 @@ try:
     @celery_app.task(name="vulnix.drain_integration_outbox", bind=True)
     def celery_drain_integration_outbox(self, limit: int = 50) -> int:  # noqa: ANN001
         return drain_integration_outbox_task(limit)
+
+    @celery_app.task(name="vulnix.probe_status", bind=True)
+    def celery_probe_status(self) -> int:  # noqa: ANN001
+        return probe_status_task()
 except ImportError:  # celery not installed in some test environments
     pass

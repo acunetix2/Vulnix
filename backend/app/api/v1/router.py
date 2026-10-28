@@ -12,6 +12,7 @@ from app.modules.integrations import oauth_routes
 from app.modules.integrations import routes as integrations_routes
 from app.modules.projects import routes as projects_routes
 from app.modules.scans import routes as scans_routes
+from app.modules.status import routes as status_routes
 from app.modules.uploads import routes as uploads_routes
 from app.modules.workspaces import routes as workspaces_routes
 
@@ -27,6 +28,7 @@ api_router.include_router(projects_routes.router)
 api_router.include_router(uploads_routes.router)
 api_router.include_router(scans_routes.router)
 api_router.include_router(findings_routes.router)
+api_router.include_router(status_routes.router)
 api_router.include_router(oauth_routes.public_router)
 
 
