@@ -22,6 +22,13 @@ celery_app.conf.update(
             "task": "vulnix.drain_integration_outbox",
             "schedule": timedelta(seconds=60),
         },
+        # The status history has to be written from outside the API: a process
+        # that is down cannot report that it is down. Nothing is recorded until
+        # VULNIX_STATUS_PROBE_URL names the origin to probe.
+        "probe-status": {
+            "task": "vulnix.probe_status",
+            "schedule": timedelta(seconds=60),
+        },
     },
 )
 

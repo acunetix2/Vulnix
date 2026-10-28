@@ -390,3 +390,30 @@ class IntegrationDelivery(Base, TimestampMixin):
     last_error_code: Mapped[str | None] = mapped_column(String(64))
     http_status: Mapped[int | None] = mapped_column(Integer)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class StatusProbe(Base):
+    """One scheduler-authored observation of the public API.
+
+    Written by the beat process over HTTPS rather than by the API about itself, so
+    an API that is down leaves a gap in the record instead of a claim that it is
+    fine. Nothing here is user data, which is why the status page can read it
+    without a session.
+    """
+
+    __tablename__ = "status_probes"
+    __table_args__ = (Index("ix_status_probes_checked", "checked_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    checked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+    # False means the probe could not complete the request at all, or completed it
+    # with a non-2xx answer. Both are outages; `error_code` says which.
+    reachable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    # The component map exactly as /ready reported it: names and one-word states.
+    components: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+

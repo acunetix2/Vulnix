@@ -695,3 +695,89 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
   preflight with `Origin: https://vulnix.aventorgo.xyz` returned 405 with zero `access-control-*` headers, both
   before and after this change), and Google is not known to be enabled in the Supabase project. The 405 is
   fixed; the next error after it will be CORS, and that is the operator's setting to make.
+
+## Verification log (2026-10-28, the owner signed in; an audit still could not start)
+
+- The auth fix is live, read off the deployed host rather than assumed: Pages now serves
+  `assets/index-PHhrYQmr.js` (2,539,456 bytes) in which both `auth/oauth/init` call sites use one minified
+  constant defined as `` Mr=`https://vulnix-iry7.onrender.com/api/v1` ``. Before the fix the two call sites
+  used two different locals, and the built bundle contained zero relative `/api/v1` literals - the old
+  hardcoded base is gone from the shipped artifact.
+- CORS is now configured on the API. An `OPTIONS` preflight with `Origin: https://vulnix.aventorgo.xyz` returns
+  200 and carries `access-control-allow-origin: https://vulnix.aventorgo.xyz`, the six methods and the
+  600-second max age, so ADR-022's allowlist is doing its job in production for the first time.
+- The remaining 400 is a header, not an origin, and it was isolated by changing only the header: on the same
+  URL with the same origin, `Access-Control-Request-Headers: authorization,content-type,idempotency-key`
+  returned 400 while `authorization,content-type` returned 200. `createScan` sends an `Idempotency-Key`
+  (`src/services/api.js:442`) and `app/main.py:144` did not list it, so Starlette answered the preflight with
+  "Disallowed CORS headers" before routing (`starlette/middleware/cors.py:126-130`, `:141-143`) - which is why
+  `GET` on the same path was fine and why the log made the endpoint look broken.
+- Fixed by naming the header in `allow_headers`, with `tests/unit/test_cors.py` gaining one test that the real
+  audit preflight passes and one that an arbitrary header still gets a 400. Suite for that file: **6 passed in
+  5.21s**, the only warning the pre-existing Starlette `testclient` deprecation. The enumeration of headers
+  the console sets (`Authorization`, `Content-Type`, `Idempotency-Key`) is now covered, so this is closed as a
+  class and not just for this one call.
+- Why it stayed invisible until production: `frontend/.env` sets `VITE_API_BASE_URL=/api/v1`, the Vite dev
+  proxy makes every request same-origin, and a same-origin request sends no preflight. No local run of any
+  kind can reach this code path, and the deployed backend has to be redeployed before the fix is live.
+- The optional CLI checks on the audit page were re-checked against the decision rather than assumed stale:
+  `ScanOptions` (`app/schemas/scans.py:16-19`) and `build_adapters()` (`app/scanning/adapters/__init__.py:16-21`)
+  both default `static_analysis`, `secrets` and `dependencies` to false, `NewScan.jsx` starts with only
+  `agent_review` on, and the rows are labelled Optional. ADR-014 is honoured in code. The open question is
+  honesty of the control on Render, which has none of those binaries: a missing tool reports
+  `status="skipped", error_code="TOOL_UNAVAILABLE"` (`app/scanning/adapters/base.py:67`) and `_decide()` does
+  not count skipped rows as failures, so an enabled switch adds noise, never findings, and never breaks the
+  audit.
+
+## Verification log (2026-10-28, the status page measured nothing and blamed the visitor)
+
+- The outage banner was a client-side inference, not a measurement: `SystemStatus.jsx` set
+  `overall = error ? 'outage' : …` from its own browser fetch. Two production events made that fetch fail over
+  a healthy API - a content blocker returning `net::ERR_BLOCKED_BY_CLIENT` for
+  `https://vulnix-iry7.onrender.com/api/v1/ready`, and Render's cold start closing the connection - and either
+  one rendered "Active service disruption". Meanwhile `/health` measured 200 in ~0.7s and `/ready` 200 in
+  ~1.2-1.5s. Same file, two more dishonest mappings: an unset config value displayed as a degraded red row, and
+  a disabled AI provider was indistinguishable from a broken one.
+- Fixed by moving authorship to the scheduler (ADR-029). `app/modules/status/service.py:probe()` GETs
+  `{VULNIX_STATUS_PROBE_URL}/ready`, stores reachability, HTTP status, latency and the component map in
+  `status_probes`, and prunes past 14 days; `vulnix.probe_status` runs it every 60s from Beat
+  (`app/workers/celery_app.py:beat_schedule`, returning 0 when no origin is named so an unconfigured scheduler
+  still reports clean runs). `GET /api/v1/status` is public and IP-rate-limited, `POST /api/v1/status/probe` is
+  authenticated. The page reads stored rows and renders its own failed request as a neutral "This page could not
+  load" panel, never as an outage.
+- State mapping, checked as behaviour not asserted: `overall_state()` treats an unreachable API or a down
+  database as outage, a down redis or any degraded/unknown value as degraded, and everything else as
+  operational - with `disabled`/`not_configured`/`unregistered` resolving to `not_enabled`, which is grey and
+  does not lower the banner. History is 60 buckets per window (6h/24h/7d), worst state in a bucket wins,
+  consecutive outage rows group into incidents, and a bucket with no probes reports `nodata` rather than green.
+- New tests: `backend/tests/unit/test_status.py`, **16 passed** - the 412 before an origin is named, a healthy
+  check storing the map, transport failure storing `UNREACHABLE` with an empty component map, 503 storing
+  `HTTP_503`, a non-dict body storing `BAD_BODY`, pruning keeping recent rows, the public read with no probing
+  configured, `?window=fortnight` returning 400, `ai="disabled"` staying operational, `redis="down"` degrading,
+  `database="down"` producing an outage and an ongoing incident, an unreachable check landing as outage, window
+  bounds limiting `total_checks`, worst-state-wins inside a bucket, two failures split by a success counting as
+  two incidents, and the authenticated probe endpoint returning 412 when unconfigured. With the CORS file:
+  **22 passed**.
+- `tests/conftest.py` now pins `VULNIX_STATUS_PROBE_URL=""`, because a developer's `.env` otherwise makes
+  `probing_enabled` true inside the suite and the history tests read rows nobody wrote.
+- The task body was exercised outside pytest, against a real running API rather than a fake client: with no
+  origin named `probe_status_task()` returned 0 and wrote nothing; pointed at a closed port it returned 1 and
+  stored `reachable=False, http_status=None, error_code="UNREACHABLE"`; pointed at a local API answering
+  `/ready` it stored `reachable=True, http_status=200, latency_ms=5070` and `summary()` returned
+  `overall="degraded"`, `uptime_percent=100.0`, 60 buckets of which 59 were `nodata`, with components mapped
+  (`redis="outage"`, everything else `operational`). That degraded result is the design working: redis is
+  genuinely unreachable from this machine, and the banner says "most of Vulnix is working" instead of red.
+- Migration applied for real: single Alembic head `c4e8a2d95b71`, `alembic upgrade head` against a fresh SQLite
+  produced `status_probes` with all six columns and `ix_status_probes_checked`.
+- Full backend suite on this tree: **393 passed, 2 warnings in 644.35s**, exit code 0, and a second
+  independent run of the same tree agreeing at **393 passed, 2 warnings in 651.01s**.
+  `pytest --collect-only` on the same tree collects 393 - so the number covers this code, status tests included.
+  Both warnings are the pre-existing Starlette `testclient` anyio deprecations, already recorded as CI debt.
+- Frontend: `npx eslint src/pages/landing/resources/SystemStatus.jsx` exits clean and `vite build` succeeds. The
+  page polls the one endpoint every 60s, and when `probing_enabled` is false it falls back to a single
+  `/ready` fetch labelled as one check made by the visitor's browser.
+- Not verified, stated plainly: nothing has been observed on the deployed pair. `VULNIX_STATUS_PROBE_URL` is
+  declared in `render.yaml` as `sync: false` but not yet set in the dashboard, the migration has not run against
+  production Postgres, the API and scheduler have not redeployed onto this code, and no real outage has ever
+  been rendered with the amber banner. Until all four hold the deployed page shows the single-check fallback -
+  honest, but not the history the owner asked for.

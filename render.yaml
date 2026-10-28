@@ -140,6 +140,11 @@ envVarGroups:
         sync: false
       - key: VULNIX_OAUTH_REDIRECT_BASE_URL
         sync: false
+      # The origin the scheduler probes for the public status page, including the
+      # /api/v1 prefix - the same value the console is built with. Blank means
+      # nothing is recorded and the page says so, rather than inventing uptime.
+      - key: VULNIX_STATUS_PROBE_URL
+        sync: false
       # Quarantined uploads and avatars have to survive a rebuild and be visible
       # to both the API and the worker, which is a shared bucket (ADR-023).
       - key: VULNIX_STORAGE_BACKEND

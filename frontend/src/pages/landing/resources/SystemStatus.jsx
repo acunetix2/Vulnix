@@ -1,299 +1,329 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  Clock,
   ArrowRight,
-  Database,
-  Zap,
-  Cpu,
-  Shield,
-  Plug,
   Activity,
+  CheckCircle2,
+  CircleDashed,
+  Clock,
+  Database,
+  Plug,
+  RefreshCw,
+  Shield,
+  Zap,
 } from 'lucide-react'
 import { Button } from '../../../components/ui/button'
 import { cn } from '../../../lib/utils'
 import { API_BASE_URL } from '../../../lib/constants'
 
+const STATUS_URL = `${API_BASE_URL}/status`
 const READY_URL = `${API_BASE_URL}/ready`
-const HEALTH_URL = API_BASE_URL.startsWith('http')
-  ? new URL('/health', API_BASE_URL).toString()
-  : '/health'
-const POLL_MS = 30_000
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function componentStatus(value) {
-  if (!value) return 'unknown'
-  if (value === 'up' || value === 'enabled' || value === 'configured') return 'operational'
-  if (value === 'down') return 'outage'
-  if (value === 'not_configured' || value === 'disabled') return 'degraded'
-  return 'unknown'
-}
-
-function overallStatus(components) {
-  const statuses = Object.values(components).map(componentStatus)
-  if (statuses.includes('outage')) return 'outage'
-  if (statuses.includes('degraded')) return 'degraded'
-  if (statuses.every((s) => s === 'operational')) return 'operational'
-  return 'unknown'
-}
-
-const STATUS_META = {
-  operational: {
-    label: 'Operational',
-    color: 'text-emerald-500',
-    bg: 'bg-emerald-500',
-    bgLight: 'bg-emerald-500/10',
-    border: 'border-emerald-500/30',
-    Icon: CheckCircle2,
-  },
-  degraded: {
-    label: 'Degraded',
-    color: 'text-amber-500',
-    bg: 'bg-amber-500',
-    bgLight: 'bg-amber-500/10',
-    border: 'border-amber-500/30',
-    Icon: AlertTriangle,
-  },
-  outage: {
-    label: 'Outage',
-    color: 'text-rose-500',
-    bg: 'bg-rose-500',
-    bgLight: 'bg-rose-500/10',
-    border: 'border-rose-500/30',
-    Icon: XCircle,
-  },
-  unknown: {
-    label: 'Unknown',
-    color: 'text-slate-400',
-    bg: 'bg-slate-400',
-    bgLight: 'bg-slate-400/10',
-    border: 'border-slate-400/30',
-    Icon: Clock,
-  },
-}
-
-// Maps backend component keys → human labels & icons
-const COMPONENT_MAP = [
-  { key: 'database',     label: 'Database',           Icon: Database,  description: 'PostgreSQL persistence layer' },
-  { key: 'supabase_auth',label: 'Auth Provider',      Icon: Shield,    description: 'Supabase authentication gateway' },
-  { key: 'ai',           label: 'AI Review Engine',   Icon: Cpu,       description: 'Primary LLM reviewer' },
-  { key: 'ai_fallback',  label: 'AI Fallback',        Icon: Zap,       description: 'Reviewer handover when the primary is down' },
-  { key: 'ai_hosted_primary',   label: 'Hosted reviewer',      Icon: Activity, description: 'First hosted review engine, credential present or not' },
-  { key: 'ai_hosted_secondary', label: 'Hosted reviewer alt',  Icon: Activity, description: 'Second hosted engine that takes over an audit' },
-  { key: 'ai_hosted_tertiary',  label: 'Hosted reviewer reserve', Icon: Activity, description: 'Last engine in the chain, for narrow files' },
-  { key: 'integrations', label: 'Integrations',       Icon: Plug,      description: 'GitHub, Slack, Jira webhooks' },
+const POLL_MS = 60_000
+const WINDOWS = [
+  { key: '6h', label: '6 hours' },
+  { key: '24h', label: '24 hours' },
+  { key: '7d', label: '7 days' },
 ]
 
-const MAX_HISTORY_CHECKS = 60
-const COMPONENT_KEYS = COMPONENT_MAP.map(({ key }) => key)
-
-function UptimeBars({ history }) {
-  const emptySlots = MAX_HISTORY_CHECKS - history.length
-  const bars = [
-    ...Array.from({ length: emptySlots }, () => null),
-    ...history,
-  ]
-
-  return (
-    <div
-      className="flex h-8 items-stretch gap-0.5"
-      role="img"
-      aria-label={`${history.length} of ${MAX_HISTORY_CHECKS} recent checks recorded this visit`}
-    >
-      {bars.map((check, index) => {
-        const status = check?.status || 'unknown'
-        const meta = STATUS_META[status]
-        const title = check
-          ? `${meta.label} — ${new Date(check.checkedAt).toLocaleString()}`
-          : 'No check recorded this visit'
-
-        return (
-          <div
-            key={check?.checkedAt || `empty-${index}`}
-            title={title}
-            className={cn('min-w-0 flex-1 rounded-[2px]', check ? meta.bg : 'bg-muted')}
-          />
-        )
-      })}
-    </div>
-  )
+// The words the status API answers with, and what each looks like. An outage is
+// shown in amber, not red: this page exists to inform, and a wall of red tells a
+// visitor nothing they can act on.
+const STATE = {
+  operational: { label: 'Operational', dot: 'bg-emerald-500', text: 'text-emerald-600', bar: 'bg-emerald-500' },
+  degraded:    { label: 'Limited',     dot: 'bg-amber-500',   text: 'text-amber-600',   bar: 'bg-amber-500' },
+  outage:      { label: 'Unavailable', dot: 'bg-rose-400',    text: 'text-rose-500',    bar: 'bg-rose-400' },
+  not_enabled: { label: 'Not enabled', dot: 'bg-slate-300',   text: 'text-muted-foreground', bar: 'bg-muted' },
+  nodata:      { label: 'No check',    dot: 'bg-slate-300',   text: 'text-muted-foreground', bar: 'bg-muted' },
+  unknown:     { label: 'Checking',    dot: 'bg-slate-400',   text: 'text-muted-foreground', bar: 'bg-muted' },
 }
 
-function StatusBadge({ status, className }) {
-  const meta = STATUS_META[status] || STATUS_META.unknown
-  const Icon = meta.Icon
-  return (
-    <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold', meta.bgLight, meta.border, meta.color, className)}>
-      <Icon className="size-3.5 shrink-0" />
-      {meta.label}
-    </span>
-  )
+const COMPONENTS = [
+  { key: 'database', label: 'Database', Icon: Database, description: 'Where your projects, audits and findings are kept' },
+  { key: 'redis', label: 'Queue', Icon: Activity, description: 'Carries audit jobs from the console to the worker' },
+  { key: 'supabase_auth', label: 'Sign-in', Icon: Shield, description: 'Accounts, password sign-in and OAuth' },
+  { key: 'ai', label: 'AI review', Icon: Zap, description: 'The reviewer that reads code and writes findings' },
+  { key: 'ai_fallback', label: 'Reviewer handover', Icon: Zap, description: 'Takes an audit over when the first reviewer is unavailable' },
+  { key: 'integrations', label: 'Integrations', Icon: Plug, description: 'GitHub, Slack and Jira delivery' },
+]
+
+// A live browser check is only as good as the words /ready uses, so the same
+// judgement is made here in miniature for deployments without recorded history.
+function readLiveState(value) {
+  if (value === 'up' || value === 'enabled' || value === 'configured' || value === 'ready') return 'operational'
+  if (value === 'disabled' || value === 'not_configured' || value === 'unregistered') return 'not_enabled'
+  if (value === 'down') return 'outage'
+  return 'degraded'
 }
 
-function ComponentRow({ label, Icon, description, value, history, error }) {
-  const status = error ? 'outage' : componentStatus(value)
-  const meta = STATUS_META[status]
-  return (
-    <div className="flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-xs transition-all hover:shadow-sm">
-      <div className={cn('flex size-10 shrink-0 items-center justify-center rounded-lg border', meta.bgLight, meta.border)}>
-        <Icon className={cn('size-5', meta.color)} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="font-semibold text-sm text-foreground">{label}</span>
-          <StatusBadge status={status} />
-        </div>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
-        <div className="mt-2">
-          <UptimeBars history={history} />
-          <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
-            <span>{history.length} recent checks this visit</span>
-            <span>{history.length ? meta.label : 'No checks yet'}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
+function formatTime(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-function OverallBanner({ overall, lastChecked }) {
-  const meta = STATUS_META[overall] || STATUS_META.unknown
-  const Icon = meta.Icon
+function formatDayTime(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
-  const bannerStyle = {
-    operational: 'bg-emerald-50 border-emerald-200',
-    degraded:    'bg-amber-50 border-amber-200',
-    outage:      'bg-rose-50 border-rose-200',
-    unknown:     'bg-slate-100 border-slate-200',
-  }[overall] || 'bg-slate-100 border-slate-200'
+function formatDuration(seconds) {
+  if (seconds < 60) return 'under a minute'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} min`
+  const hours = minutes / 60
+  return hours < 10 ? `${hours.toFixed(1)} h` : `${Math.round(hours)} h`
+}
 
-  const headline = {
-    operational: 'All systems operational',
-    degraded:    'Some services degraded',
-    outage:      'Active service disruption',
-    unknown:     'Checking system health…',
-  }[overall]
+function headlineFor(overall, incident) {
+  if (overall === 'operational') {
+    return {
+      title: 'Everything is up',
+      body: 'Every core service answered our last check. Audits, sign-in and findings are all available.',
+    }
+  }
+  if (overall === 'degraded') {
+    return {
+      title: 'Most of Vulnix is working',
+      body: 'One supporting service is having a problem, so some features may run slowly or wait longer than usual. Your data is safe and nothing here needs you to do anything.',
+    }
+  }
+  if (overall === 'outage') {
+    return {
+      title: incident?.ongoing
+        ? "We're aware, and we're on it"
+        : 'Some of Vulnix was unavailable',
+      body: 'Our own checks could not reach part of the service, so an audit may not start or finish while it lasts. Nothing you saved is at risk, and you do not need to do anything - this page updates on its own.',
+    }
+  }
+  return {
+    title: 'Setting up the checks',
+    body: 'No observations have been recorded yet. The scheduler writes one every minute once this deployment names an origin to probe.',
+  }
+}
 
-  return (
-    <div className={cn('rounded-2xl border p-6 shadow-lg', bannerStyle)}>
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className={cn('flex size-14 items-center justify-center rounded-2xl border', meta.bgLight, meta.border)}>
-            <Icon className={cn('size-7', meta.color)} />
-          </div>
+function Banner({ status, clientError, loading }) {
+  if (clientError) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 shadow-sm sm:p-8">
+        <div className="flex items-start gap-4">
+          <span className="mt-0.5 flex size-11 shrink-0 items-center justify-center rounded-xl bg-white ring-1 ring-slate-200">
+            <CircleDashed className="size-6 text-slate-500" />
+          </span>
           <div>
-            <h2 className={cn('text-xl font-bold', meta.color)}>{headline}</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {lastChecked ? `Automatically checked ${lastChecked}` : 'Checking automatically…'}
+            <h2 className="text-xl font-bold text-foreground sm:text-2xl">This page could not load</h2>
+            <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+              Your browser could not reach the status service, which says something about this
+              connection - an ad blocker, a network rule - and not about Vulnix. Recorded history
+              below is unaffected.
             </p>
           </div>
         </div>
       </div>
-    </div>
-  )
-}
+    )
+  }
 
-function SkeletonRow() {
+  if (loading && !status) {
+    return (
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm sm:p-8">
+        <div className="h-7 w-56 animate-pulse rounded-lg bg-muted" />
+        <div className="mt-3 h-4 w-full max-w-xl animate-pulse rounded bg-muted" />
+      </div>
+    )
+  }
+
+  const overall = status?.overall ?? 'unknown'
+  const copy = headlineFor(overall, status?.incidents?.at(-1))
+  const accent = STATE[overall] ?? STATE.unknown
+
   return (
-    <div className="flex items-center gap-4 rounded-xl border border-border bg-card p-4">
-      <div className="size-10 shrink-0 rounded-lg bg-muted animate-pulse" />
-      <div className="flex-1 space-y-2">
-        <div className="flex justify-between">
-          <div className="h-4 w-32 rounded bg-muted animate-pulse" />
-          <div className="h-6 w-24 rounded-full bg-muted animate-pulse" />
+    <div
+      className={cn(
+        'rounded-2xl border p-6 shadow-sm sm:p-8',
+        overall === 'operational' && 'border-emerald-500/25 bg-emerald-500/[0.08]',
+        overall === 'degraded' && 'border-amber-500/25 bg-amber-500/[0.07]',
+        overall === 'outage' && 'border-amber-500/30 bg-amber-500/[0.10]',
+        (overall === 'unknown' || overall === 'nodata') && 'border-border bg-card',
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-5">
+        <div className="flex items-start gap-4">
+          <span
+            className={cn(
+              'mt-0.5 flex size-11 shrink-0 items-center justify-center rounded-xl',
+              overall === 'operational' ? 'bg-emerald-500/15' : 'bg-white/70 ring-1 ring-amber-500/25',
+            )}
+          >
+            {overall === 'operational' ? (
+              <CheckCircle2 className="size-6 text-emerald-600" />
+            ) : (
+              <Activity className={cn('size-6', accent.text)} />
+            )}
+          </span>
+          <div>
+            <h2 className="text-xl font-bold text-foreground sm:text-2xl">{copy.title}</h2>
+            <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">{copy.body}</p>
+          </div>
         </div>
-        <div className="h-2.5 w-48 rounded bg-muted animate-pulse" />
-        <div className="h-8 w-full rounded bg-muted animate-pulse mt-2" />
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className={cn('size-2 rounded-full', accent.dot)} />
+          {STATE[overall]?.label ?? 'Checking'}
+        </div>
       </div>
     </div>
   )
 }
 
-// ── main component ────────────────────────────────────────────────────────────
+function HistoryStrip({ buckets, windowKey }) {
+  const label = WINDOWS.find((w) => w.key === windowKey)?.label ?? 'the window'
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-foreground">Recorded checks</h3>
+        <p className="text-[11px] text-muted-foreground">
+          Each bar covers a slice of the last {label.toLowerCase()}
+        </p>
+      </div>
+      <div
+        className="mt-4 flex h-10 items-stretch gap-[3px]"
+        role="img"
+        aria-label={`Service history across ${label}, one bar per check window`}
+      >
+        {buckets.map((bucket) => {
+          const meta = STATE[bucket.state] ?? STATE.nodata
+          return (
+            <div
+              key={bucket.started_at}
+              title={`${formatDayTime(bucket.started_at)} — ${meta.label}${bucket.probes ? ` (${bucket.probes} checks)` : ''}`}
+              className={cn('min-w-0 flex-1 rounded-[3px]', meta.bar)}
+            />
+          )
+        })}
+      </div>
+      <div className="mt-2 flex justify-between text-[10px] text-muted-foreground">
+        <span>{buckets.length ? formatDayTime(buckets[0].started_at) : ''}</span>
+        <span>now</span>
+      </div>
+    </div>
+  )
+}
+
+function Incidents({ incidents, windowKey }) {
+  if (!incidents?.length) {
+    return (
+      <p className="rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground">
+        No recorded outages in this window.
+      </p>
+    )
+  }
+  return (
+    <ul className="space-y-2">
+      {incidents.map((incident) => (
+        <li
+          key={incident.started_at}
+          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card px-4 py-3 text-xs"
+        >
+          <span className="flex items-center gap-2 text-muted-foreground">
+            <Clock className="size-3.5" />
+            {formatDayTime(incident.started_at)}
+            {incident.ongoing ? ' — in progress' : ''}
+          </span>
+          <span className="font-medium text-foreground">
+            {incident.ongoing ? 'Being checked' : `Resolved after ${formatDuration(incident.duration_seconds)}`}
+          </span>
+        </li>
+      ))}
+      <li className="px-1 text-[11px] text-muted-foreground">
+        Incidents come from checks taken a minute apart, so a very short one is listed by when it was
+        first noticed. Window: {WINDOWS.find((w) => w.key === windowKey)?.label}.
+      </li>
+    </ul>
+  )
+}
+
+function ServiceRow({ label, Icon, description, state }) {
+  const meta = STATE[state] ?? STATE.unknown
+  return (
+    <div className="flex items-center gap-4 rounded-xl border border-border bg-card p-4 shadow-xs">
+      <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted/60')}>
+        <Icon className={cn('size-5', meta.text)} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-foreground">{label}</span>
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className={cn('size-2 rounded-full', meta.dot)} />
+            {meta.label}
+          </span>
+        </div>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
+      </div>
+    </div>
+  )
+}
+
+function Fact({ label, value }) {
+  return (
+    <div className="rounded-xl border border-border bg-card px-4 py-3">
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-sm font-semibold text-foreground">{value}</div>
+    </div>
+  )
+}
 
 export function SystemStatus() {
-  const [ready, setReady]           = useState(null)   // raw /ready response
-  const [health, setHealth]         = useState(null)   // raw /health response
-  const [loading, setLoading]       = useState(true)
-  const [error, setError]           = useState(null)
-  const [lastChecked, setLastChecked] = useState(null)
-  const [checkHistory, setCheckHistory] = useState({})
-
-  const recordChecks = useCallback((statuses, checkedAt) => {
-    setCheckHistory((current) => {
-      const next = { ...current }
-      for (const key of COMPONENT_KEYS) {
-        const status = statuses[key] || 'down'
-        next[key] = [
-          ...(current[key] || []),
-          { status: componentStatus(status), checkedAt },
-        ].slice(-MAX_HISTORY_CHECKS)
-      }
-      return next
-    })
-  }, [])
+  const [windowKey, setWindowKey] = useState('24h')
+  const [status, setStatus] = useState(null)
+  const [live, setLive] = useState(null)
+  const [clientError, setClientError] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   const poll = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    setClientError(false)
     try {
-      const [readyRes, healthRes] = await Promise.all([
-        fetch(READY_URL, { cache: 'no-store' }),
-        fetch(HEALTH_URL, { cache: 'no-store' }),
-      ])
-      if (!readyRes.ok) throw new Error(`Readiness check returned HTTP ${readyRes.status}.`)
-      if (!healthRes.ok) throw new Error(`Liveness check returned HTTP ${healthRes.status}.`)
-
-      const [readyData, healthData] = await Promise.all([readyRes.json(), healthRes.json()])
-      const checkedAt = new Date()
-      setReady(readyData)
-      setHealth(healthData)
-      setLastChecked(checkedAt.toLocaleTimeString())
-      recordChecks(readyData, checkedAt.toISOString())
-    } catch (err) {
-      recordChecks({}, new Date().toISOString())
-      setError(err instanceof Error ? `Could not load live system status: ${err.message}` : 'Could not load live system status.')
+      const response = await fetch(`${STATUS_URL}?window=${windowKey}`, { cache: 'no-store' })
+      if (!response.ok) throw new Error(`Status service returned ${response.status}.`)
+      const body = await response.json()
+      setStatus(body)
+      // Without a recorded history the page still answers for itself, from a
+      // single live readiness check, and says which one it is showing.
+      if (body.probing_enabled) {
+        setLive(null)
+      } else {
+        const ready = await fetch(READY_URL, { cache: 'no-store' })
+        setLive(ready.ok ? await ready.json() : null)
+      }
+    } catch {
+      setClientError(true)
     } finally {
       setLoading(false)
     }
-  }, [recordChecks])
+  }, [windowKey])
 
   useEffect(() => {
-    const initialCheck = setTimeout(poll, 0)
+    const first = setTimeout(poll, 0)
     const timer = setInterval(poll, POLL_MS)
     return () => {
-      clearTimeout(initialCheck)
+      clearTimeout(first)
       clearInterval(timer)
     }
   }, [poll])
 
-  // Derive overall
-  const components = ready
-    ? {
-        database:     ready.database,
-        supabase_auth: ready.supabase_auth,
-        ai:           ready.ai,
-        ai_fallback:  ready.ai_fallback,
-        ai_hosted_primary: ready.ai_hosted_primary,
-        ai_hosted_secondary: ready.ai_hosted_secondary,
-        ai_hosted_tertiary: ready.ai_hosted_tertiary,
-        integrations: ready.integrations,
-      }
-    : {}
-
-  const overall = error
-    ? 'outage'
-    : loading && !ready
-    ? 'unknown'
-    : overallStatus(components)
+  const services = useMemo(() => {
+    if (status?.components && Object.keys(status.components).length) return status.components
+    if (!live) return {}
+    return Object.fromEntries(
+      Object.entries(live)
+        .filter(([, value]) => typeof value === 'string')
+        .map(([key, value]) => [key, readLiveState(value)]),
+    )
+  }, [status, live])
 
   return (
     <div className="min-h-screen bg-canvas">
-      {/* Nav */}
       <header className="sticky top-0 z-50 h-16 border-b border-border/80 bg-background/90 backdrop-blur-md">
         <div className="mx-auto flex h-full max-w-5xl items-center justify-between px-4 sm:px-6">
           <Link to="/" className="flex items-center gap-2.5">
@@ -312,62 +342,98 @@ export function SystemStatus() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl space-y-8 px-4 py-12 sm:px-6">
-
-        {/* Page title */}
-        <div className="space-y-1">
-          <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">System status</h1>
-          <p className="text-sm text-muted-foreground">
-            Service checks update automatically every 30 seconds. Bars show checks recorded while this page is open.
-          </p>
+      <main className="mx-auto max-w-5xl space-y-6 px-4 py-12 sm:px-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="space-y-1">
+            <h1 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">System status</h1>
+            <p className="text-sm text-muted-foreground">
+              Recorded by our own scheduler once a minute, from outside the service it checks.
+            </p>
+          </div>
+          <Button variant="ghost" size="sm" onClick={poll} disabled={loading}>
+            <RefreshCw className="size-3.5" data-icon="inline-start" />
+            Check now
+          </Button>
         </div>
 
-        {/* Overall banner */}
-        <OverallBanner
-          overall={overall}
-          lastChecked={lastChecked}
-        />
+        <Banner status={status} clientError={clientError} loading={loading} />
 
-        {/* Error alert */}
-        {error && (
-          <div className="flex items-center gap-3 rounded-xl border border-rose-500/30 bg-rose-500/5 p-4 text-sm text-rose-400">
-            <XCircle className="size-5 shrink-0" />
-            {error}
+        <div className="flex flex-wrap items-center gap-2">
+          {WINDOWS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setWindowKey(option.key)}
+              className={cn(
+                'rounded-full border px-3 py-1 text-xs font-semibold transition-colors',
+                windowKey === option.key
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700'
+                  : 'border-border bg-card text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
+          <span className="ml-auto text-[11px] text-muted-foreground">
+            {status?.latest ? `Last recorded check ${formatTime(status.latest.checked_at)}` : 'No recorded check yet'}
+          </span>
+        </div>
+
+        {!clientError && (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Fact
+              label="Availability"
+              value={
+                status?.uptime_percent == null
+                  ? 'Not recorded yet'
+                  : `${status.uptime_percent}% of checks`
+              }
+            />
+            <Fact
+              label="Checks in window"
+              value={status?.total_checks ? `${status.total_checks}` : '0'}
+            />
+            <Fact
+              label="Response time"
+              value={status?.latest?.latency_ms != null ? `${status.latest.latency_ms} ms` : '—'}
+            />
           </div>
         )}
 
-        {/* Raw health probe */}
-        {health && !error && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className={cn('size-2 rounded-full animate-pulse', health.status === 'ok' ? 'bg-emerald-500' : 'bg-rose-500')} />
-            API response: <span className="font-medium text-foreground">{health.status === 'ok' ? 'Online' : 'Unavailable'}</span>
-          </div>
-        )}
+        <HistoryStrip buckets={status?.buckets ?? []} windowKey={windowKey} />
 
-        {/* Per-component rows */}
         <section className="space-y-3">
           <h2 className="text-base font-semibold text-foreground">Services</h2>
-          {loading && !ready ? (
+          <p className="text-[11px] text-muted-foreground">
+            {status && !status.probing_enabled
+              ? 'This deployment has no recorded history yet, so this is one live check made by your browser.'
+              : 'A service listed as not enabled was never switched on for this deployment - it is not a failure.'}
+          </p>
+          {loading && !status ? (
             <div className="space-y-3">
-              {COMPONENT_MAP.map((c) => <SkeletonRow key={c.key} />)}
+              {COMPONENTS.map((c) => (
+                <div key={c.key} className="h-[76px] animate-pulse rounded-xl border border-border bg-card" />
+              ))}
             </div>
           ) : (
             <div className="space-y-3">
-              {COMPONENT_MAP.map(({ key, label, Icon, description }) => (
-                <ComponentRow
+              {COMPONENTS.map(({ key, label, Icon, description }) => (
+                <ServiceRow
                   key={key}
                   label={label}
                   Icon={Icon}
                   description={description}
-                  value={ready?.[key]}
-                  history={checkHistory[key] || []}
-                  error={error}
+                  state={clientError && !services[key] ? 'unknown' : (services[key] ?? 'unknown')}
                 />
               ))}
             </div>
           )}
         </section>
 
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold text-foreground">Recent incidents</h2>
+          <Incidents incidents={status?.incidents ?? []} windowKey={windowKey} />
+        </section>
       </main>
     </div>
   )

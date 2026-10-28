@@ -55,3 +55,35 @@ def test_an_unlisted_origin_gets_no_cors_headers(monkeypatch) -> None:
         "/health", headers={"Origin": "https://another.example"}
     )
     assert response.headers.get("access-control-allow-origin") is None
+
+
+def test_starting_an_audit_may_ask_for_the_idempotency_key(monkeypatch) -> None:
+    # An audit POST carries an Idempotency-Key, so the browser preflights for it. A
+    # preflight naming a header outside the allowlist is answered 400 by the CORS
+    # layer before routing, which reads as a broken endpoint, not a missing setting.
+    client = _client(monkeypatch, "https://console.example")
+    preflight = client.options(
+        "/api/v1/projects/00000000-0000-0000-0000-000000000000/scans",
+        headers={
+            "Origin": "https://console.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type,idempotency-key",
+        },
+    )
+    assert preflight.status_code == 200
+    assert "idempotency-key" in preflight.headers["access-control-allow-headers"].lower()
+
+
+def test_a_header_the_console_never_sends_is_still_refused(monkeypatch) -> None:
+    # The allowlist stays a list, not a wildcard: widening it for the one header
+    # above must not turn into mirroring back whatever a page asks for.
+    client = _client(monkeypatch, "https://console.example")
+    preflight = client.options(
+        "/health",
+        headers={
+            "Origin": "https://console.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-arbitrary-client-header",
+        },
+    )
+    assert preflight.status_code == 400

@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_eager: bool = True  # run scans inline; set false once Redis is up
 
+    # Status history. The scheduler probes this origin and stores each
+    # observation, so the public status page shows real uptime instead of
+    # whatever the visitor's browser could reach. Empty means no probing.
+    status_probe_url: str = ""
+    status_probe_timeout_seconds: float = 10.0
+
     # Object storage
     storage_backend: Literal["local", "s3"] = "local"
     storage_local_root: str = "./.data/storage"

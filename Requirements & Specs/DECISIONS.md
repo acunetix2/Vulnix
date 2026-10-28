@@ -244,7 +244,7 @@ Record material decisions here. Do not silently change a decision that affects d
 - **Date / owner:** 2026-10-27 / a green suite on one machine, red on another, because of a key rotation.
 
 ## ADR-022 — A deployed console crosses into the API through a named allowlist
-- **Status:** Accepted
+- **Status:** Accepted, revised by ADR-028 (the header list in point 3 omitted `Idempotency-Key`)
 - **Context:** On a laptop the console and the API are one origin: Vite proxies `/api` and `/health` to `localhost:8000`, so no browser ever applies cross-origin rules and nothing in the backend had to think about them. A deployment breaks that identity for a good reason — the console is static content best served from a CDN (Cloudflare Pages) while the API is a long-lived Python process (Render) — and the result is that every authorized call the console makes is cross-origin. Every one of those calls carries an `Authorization` header, which is not a CORS-safelisted header, so each one is preceded by a preflight that the API answered with a 404-shaped response and no `Access-Control-Allow-Origin`, and the browser reported it as a network error rather than a refusal. An unset allowlist is therefore not a neutral default in production; it is a console that cannot read its own data.
 - **Decision:**
   1. `VULNIX_CORS_ALLOW_ORIGINS` holds a comma-separated list of exact browser origins (scheme and host, no trailing slash) and the API mounts `CORSMiddleware` only when the list is non-empty. Wildcards are not accepted, in code and in the setting's shape.
@@ -368,6 +368,114 @@ Record material decisions here. Do not silently change a decision that affects d
   URL is configured to permit them.
 - **Date / owner:** 2026-10-28 / reported from the operator's browser console, diagnosed against the deployed
   bundle and the source, fixed in source, not yet verified in a browser.
+
+## ADR-028 — The CORS header allowlist names every header the console sends
+
+- **Status:** Accepted
+- **Context:** ADR-022 gave the API an explicit origin allowlist, and the first thing it broke afterwards
+  was starting an audit. The deployed log showed `OPTIONS /api/v1/projects/{id}/scans" 400 Bad Request`
+  while `GET` on the same path returned 200. Starlette answers a preflight itself, before routing: if the
+  request names a header outside `allow_headers`, it returns a plain-text **400 "Disallowed CORS headers"**
+  and the route never runs (installed `starlette/middleware/cors.py:126-130` and `:141-143`). `createScan`
+  sends an `Idempotency-Key` (`src/services/api.js:442`), and the list in `app/main.py:144` carried only
+  `Authorization`, `Content-Type` and `X-Request-ID`. Proven on the live host, same URL and same origin, the
+  only difference being the requested header: with `idempotency-key` the preflight answered 400, without it
+  the same preflight answered 200. This could not have been caught locally, because the Vite dev proxy makes
+  every request same-origin and a same-origin request sends no preflight at all.
+- **Decision:**
+  1. Add `Idempotency-Key` to `allow_headers`. The list is now complete by construction: an enumeration of
+     every header the console sets (`Authorization`, `Content-Type`, `Idempotency-Key`) plus `X-Request-ID`
+     for correlation, and nothing else.
+  2. Keep the list explicit rather than `["*"]`. ADR-022's reason holds: these requests carry a bearer token,
+     and Starlette's wildcard behaviour is to mirror back whatever a page asks for, which turns a config
+     list into an echo.
+  3. Two tests, one each side of the boundary. `test_starting_an_audit_may_ask_for_the_idempotency_key`
+     asserts the real preflight the console sends now passes; `test_a_header_the_console_never_sends_is_still_
+     refused` asserts an arbitrary header still gets a 400. The second is the tripwire that stops the next
+     instance of this bug being solved by widening the list to a wildcard.
+- **Alternatives considered:** `allow_headers=["*"]` (would have made the red log line disappear and quietly
+  removed the boundary ADR-022 was written to create); dropping the idempotency key from `createScan` (the
+  key is what turns a double-clicked Start Audit into one audit rather than two, so this removes a
+  correctness feature to satisfy an omitted config value); moving the key into the request body (the replay
+  guard reads it as a header at `app/modules/scans/routes.py:37` and `IdempotencyKey` is keyed by
+  user and header value, so a body field would be a second, parallel concept for the same guarantee).
+- **Security implications:** `allow_headers` is not an authorization boundary - it only decides whether a
+  preflight is answered, and the actual request still needs a valid bearer token and a passing workspace role
+  check. The idempotency key is a client-chosen UUID scoped to the authenticated user in its own table, so
+  permitting the header exposes nothing it did not already accept on same-origin deployments. A 400 from the
+  CORS layer carries no body beyond that sentence, so it leaks nothing about the route behind it.
+- **Consequences:** the fix ships only when the API is redeployed from this commit, and until then the
+  console cannot start an audit cross-origin while every other page works, which is the confusing part for
+  whoever is looking at it. Going forward, any new custom header the console sends has to be added here in
+  the same change or it will fail the same way - and the failure will again be invisible in development,
+  which is the standing argument for testing CORS preflights against the deployed host rather than trusting
+  the dev proxy.
+- **Date / owner:** 2026-10-28 / found by the owner's own log line, confirmed by two preflights against the
+  deployed API.
+
+## ADR-029 — Status history is probed by the scheduler and read publicly
+- **Status:** Accepted
+- **Context:** The public status page inferred the whole banner from one fetch made by the visitor's browser:
+  `overall = error ? 'outage' : …`. On the deployed pair that fetch was blocked by a browser content blocker
+  (`net::ERR_BLOCKED_BY_CLIENT`) and, at other moments, by Render's cold-start connection close, so the page
+  announced "Active service disruption" while `/health` returned 200 in ~0.7s and `/ready` returned 200 in
+  ~1.2-1.5s. Two more lies came out of the same design: a component with no config value rendered as a red
+  "degraded" row, and a disabled AI provider looked identical to a broken one. There was also no history -
+  only whatever the current browser happened to see - so an outage that ended before a visitor arrived left no
+  trace, and the green strip could not say anything about the last 24 hours.
+- **Decision:**
+  1. The **scheduler** authors the record, not the browser. A Beat entry (`vulnix.probe_status`, 60s,
+     `app/workers/celery_app.py`) GETs `{VULNIX_STATUS_PROBE_URL}/ready` and stores one `status_probes` row
+     per observation (`app/modules/status/service.py:probe`). A visitor reads stored rows, so a blocked or
+     slow browser changes nothing about what the page claims.
+  2. The read endpoint is **public**, the write path is not. `GET /api/v1/status` is unauthenticated - it is a
+     status page - and rate-limited by client IP (30/min, `app/modules/status/routes.py`). `POST
+     /api/v1/status/probe` requires a bearer token, so nobody outside can steer the record or use the API as
+     an arbitrary URL fetcher. The probe target is an operator setting, never request input.
+  3. **`not_enabled` is its own state.** A component whose config is empty maps to `not_enabled`
+     (`ai="disabled"` → grey, not red) and does not drag the overall banner down; only `database` down (or an
+     unreachable API) is an outage, and only `redis` down, a degraded value, or an unrecognised value is
+     "degraded" (`service.overall_state`). Redis being down degrades, because scans queue but cannot run -
+     the site itself still serves.
+  4. History is **bucketed server-side**: 60 buckets over the requested window (6h / 24h / 7d), worst state in
+     a bucket wins, consecutive outage rows grouped into incidents, 14-day retention pruned on each probe.
+     The page renders that; it does not re-derive anything from the raw rows it happens to have.
+  5. The page **keeps its own failure separate from the system's**. If the status request itself fails, the
+     banner becomes a neutral slate panel reading "This page could not load" with the fallback of one live
+     browser check, labelled as such. A browser's inability to reach the API is reported as a fact about that
+     browser, never as an outage.
+  6. Nothing is recorded until `VULNIX_STATUS_PROBE_URL` names an origin, and the endpoint says so
+     (`probing_enabled: false`) instead of showing an empty graph as a perfect month. The task returns 0, not
+     an error, so an unconfigured scheduler still reports clean runs.
+- **Alternatives considered:** browser-derived history (rejected - it is exactly the current bug, and it makes
+  the page's truth depend on the visitor's ad blocker, network and tab focus); an external status vendor such
+  as Better Stack or Instatus (rejected for now - it means a second paid service, a second page to keep in
+  sync with `/ready`, and it does not know what `ai_fallback` or `integrations` mean; it remains the right
+  answer if the product ever needs an SLA-grade, independently-hosted status page); having the API report its
+  own liveness from inside the request being measured (rejected - a request that can answer is by definition
+  proof of a live API, so it can never record the outage it would need to report); a separate uptime monitor
+  cron outside Celery (rejected - a second scheduler to operate for one row per minute, when Beat already runs
+  against the same Postgres).
+- **Security implications:** the probe URL is read from settings, not from any request, so the service is not
+  an SSRF primitive; `follow_redirects=False` means a misconfigured origin cannot turn the probe into a chain
+  to a host that was not allowlisted. Only the aggregated state is returned to the browser - `probe()` returns
+  `_as_dict(row)`, which deliberately omits the raw component map, and `summary()` re-maps it into the five
+  documented states, so the public payload carries no exception text, no dependency versions and no inner
+  hostnames. Transport failures log `type(exc).__name__` only, never the message, which is what keeps a
+  proxy's URL-embedded credentials out of the app log. The public endpoint is rate-limited by IP. The
+  migration adds a table with no foreign keys and no user data, so it cannot leak across workspaces.
+- **Consequences:** the status page now depends on the scheduler being deployed and on two operator settings
+  (`VULNIX_STATUS_PROBE_URL`, plus the broker URL Beat needs); until both hold, history stays empty and the
+  page shows the single-live-check fallback, which is honest but thinner than the design. Probing measures the
+  public `/ready` from inside the platform's own network, so it can report the API reachable while a visitor on
+  a different route still cannot reach it - the page addresses this by showing latency and the browser's own
+  check side by side rather than claiming to be an outside observer. Retention is a fixed 14 days, so an
+  incident older than that is gone; if the product later needs months of history, this becomes an aggregate
+  table rather than a longer prune window. `alembic upgrade head` must run before the first probe, or the
+  scheduler's minute-by-minute inserts fail against a missing table.
+- **Date / owner:** 2026-10-28 / requested by the owner ("design the page better at the top to have a green
+  background card and friendly messages not scarry red even when the system is down"; "we should be able to see
+  the history of system status too"), with the storage approach chosen from three options offered.
 
 ## Decision template
 ### ADR-NNN — Short title

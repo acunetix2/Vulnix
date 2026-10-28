@@ -265,5 +265,54 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
 - [ ] Sign in with GitHub and with Google in a browser against the deployed pair, and record what the
       callback page does with the code. Nothing in this change has been exercised beyond a build.
 
+## Requested 2026-10-28 — starting an audit from the deployed console
+- [x] Let the CORS layer accept the header an audit POST sends. `OPTIONS /api/v1/projects/{id}/scans` answered
+      400 while `GET` on the same path answered 200, because Starlette rejects a preflight naming a header
+      outside `allow_headers` before routing reaches anything, and `Idempotency-Key` - which `createScan`
+      sends - was not in the list. Added, with one test that the real preflight passes and one that an
+      arbitrary header still gets a 400, so the next instance is not solved by a wildcard (ADR-028).
+- [ ] Redeploy the API from this commit and re-run both preflights against the live host: with
+      `idempotency-key` requested it should be 200, and an audit should start from the console. The fix is
+      inert until the running instance carries it.
+- [ ] Decide what the three optional CLI switches mean on a host that has no CLI tools. ADR-014 made them
+      opt-in and off, which is right, but Render installs no semgrep, bandit, gitleaks, pip-audit or trivy, so
+      turning one on yields `skipped`/`TOOL_UNAVAILABLE` rows and no findings - the audit still completes,
+      because a missing tool is not counted as a failure. Either offer the switches only when the host
+      reports the binaries (which needs an availability field the API does not have yet), or install them in
+      the build command. Silently offering a dead control is the one option to avoid.
+- [ ] Test a CORS preflight in CI. Neither job can reach this today: the suite pins same-origin requests and
+      the frontend has no test runner, which is exactly why a production-only failure stayed invisible.
+
+## Requested 2026-10-28 — the status page tells the truth about what it saw
+- [x] Stop the page from calling a browser's blocked fetch an outage. `overall = error ? 'outage'` meant a
+      content blocker on the visitor's machine (`net::ERR_BLOCKED_BY_CLIENT`) produced "Active service
+      disruption" over a healthy API. The banner now reflects recorded observations; a failed status request
+      renders a neutral "This page could not load" panel instead.
+- [x] Give the top of the page the calm treatment asked for. Green panel when operational, amber - never red -
+      when something is genuinely down, with copy that says "We're aware, and we're on it" rather than
+      announcing a disaster, and rose reserved for the small history bars.
+- [x] Make "off" not look like "broken". A component with no configuration maps to `not_enabled`, which is grey
+      and does not lower the overall state; only an unreachable API or a down database is an outage, and a down
+      redis or a degraded value is degraded (ADR-029).
+- [x] Record real history. `status_probes` table + migration `c4e8a2d95b71`, a 60-second Beat probe
+      (`vulnix.probe_status`) that stores reachability, HTTP status, latency and component state, 14-day
+      retention pruned on each run.
+- [x] Serve it publicly. `GET /api/v1/status?window=6h|24h|7d` returns 60 buckets (worst state wins),
+      incidents, uptime percentage and the latest check, rate-limited 30/min by client IP;
+      `POST /api/v1/status/probe` is authenticated. `SystemStatus.jsx` polls the one endpoint once a minute and
+      falls back to a single labelled live check when probing is not configured.
+- [ ] Set `VULNIX_STATUS_PROBE_URL` on Render (the env group in `render.yaml` now declares it as `sync: false`)
+      and apply the migration, then confirm the deployed page fills in. Until both hold, history is empty by
+      design and the page says so - which is the honest state, not the finished one.
+- [ ] Redeploy both the API and the scheduler. A `status_probes` insert against a missing table, or a Beat
+      process that never restarted onto the new schedule, each leave the page in fallback with no error
+      anywhere a person would look.
+- [ ] Check the copy against a real outage once probing runs. Every message on the page has only ever been
+      exercised against fake rows in tests; the amber banner has not been seen with production data behind it.
+- [ ] Decide whether the probe should measure from outside the platform. Today the scheduler probes its own
+      service over the public URL, so it can report reachable while a specific visitor's route cannot. An
+      external prober (or the browser's own latency shown more prominently) is the honest fix if that ever
+      matters to customers.
+
 ## Working agreement
 Do not start the next phase merely because the previous phase's code exists. Confirm tests, acceptance criteria, security review, and documentation updates first.
