@@ -397,5 +397,20 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       category rather than a nonsense sentence, which is why it is listed instead of fixed here - the resolver
       needs a `Finding` join to reach a title, and the slice asked for was the upload.
 
+## Reported 2026-10-29 — the Secrets page threw `Illegal constructor`
+- [x] Import the icon the page renders. `SecretsDashboard.jsx` used `<History …>` in its
+      "Verification & Re-scanning" card without importing it, so the name resolved to the browser's
+      `window.History`. That is a function, so React treated it as a class component and called `new`
+      on it, which the interface forbids - `Uncaught TypeError: Illegal constructor`, with no error
+      boundary above the page, so the whole console unmounted rather than one card failing. Adding
+      `History` to the `lucide-react` import is the fix; the two other pages that render the same icon
+      already imported it.
+- [ ] Stop this class of bug from coming back. `no-undef` cannot see it, because `History`, `Location`,
+      `Screen`, `Node`, `Text`, `Range`, `Map`, `Set` and the rest are legitimate browser globals, and
+      eslint's React plugin does not resolve JSX tags to bindings. A ~40-line check that fails when a
+      `<Capitalized>` tag has no import or declaration in its own file would catch it in CI; it is not
+      added here because it needs a decision about where it runs (see the sweep in PROGRESS 2026-10-29,
+      which found no second instance).
+
 ## Working agreement
 Do not start the next phase merely because the previous phase's code exists. Confirm tests, acceptance criteria, security review, and documentation updates first.

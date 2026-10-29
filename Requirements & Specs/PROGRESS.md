@@ -1017,3 +1017,35 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
 - Verification: `npx eslint` on the component exits 0, `vite build` succeeds, `pytest tests/integration/test_flow
  .py` is **12 passed** against the current tree, and the full suite run covering the backend change is
   **398 passed, 2 warnings in 685.15s (0:11:25)**.
+
+## Verification log (2026-10-29, the Secrets page crashed with `Illegal constructor`)
+
+- Reported as a minified stack from the deployed bundle (`index-BBV6LeZS.js`) ending in `MessagePort.D`, which is
+  React's scheduler flushing a render pass, with the frames above it being `constructClassInstance` and its
+  callers. That shape means React called `new` on something it believed was a class component.
+- Cause: `SecretsDashboard.jsx` renders `<History className="size-4 text-sky-600" />` inside its
+  "Verification & Re-scanning" card and never imports `History`, so the identifier resolves to the browser's
+  `window.History`. Confirmed in the live browser: `typeof window.History === "function"`, and
+  `new History()` throws `TypeError: Failed to construct 'History': Illegal constructor` - the reported message.
+  Because nothing above the page is an error boundary, the whole console unmounted instead of one card.
+- The fix is the missing import. The other two pages that render this icon (`FindingDetail.jsx`,
+  `NotificationDropdown.jsx`) already imported it, which is what made the omission a name collision rather than
+  a plain broken reference.
+- Causality was proven in both directions against the real page, not the source text: an isolated preview on
+  5302 (later 5303) rendered `SecretsDashboard` with only `services/api` replaced by three fixtures, keeping the
+  real `useWorkspace`, router and UI components. With the import present: zero console errors, all three
+  detection cards and their `h4 > svg` icons rendered, the seeded finding row appeared. With the import removed
+  again: `window.__errors` recorded `Uncaught TypeError: Illegal constructor` and `#root` had 0 children.
+- Swept the same bug across every `.jsx` in `src` - a `<Capitalized>` tag with no import or declaration in its
+  own file - and checked each hit against the list of uppercase `window` properties read from the live browser,
+  since only a name that IS a global can produce this. Five undeclared names surfaced (`Icon`, `Link`, `Tag`,
+  `App`, `History`); four are locally scoped and not browser globals, so `History` was the only instance. That
+  check is why a CI guard for it is now an open task instead of a concluded one: eslint's `no-undef` cannot see
+  it, because `History` and friends are legitimate globals under the browser config.
+- Not claimed: the layout of the restored card. Screenshots still return a 0x0 viewport in this environment, so
+  this is DOM and console evidence only.
+- Cleanup: the preview process was stopped by PID after checking its command line, port 5303 confirmed free, the
+  harness and the sweep script deleted, `frontend/dist` rebuilt with the normal API base.
+- Verification: `vite build` succeeds. `npx eslint src/pages/SecretsDashboard.jsx` exits 1 on one
+  **pre-existing** unused import (`TableSkeleton`, line 39) that this session did not touch and did not fix,
+  because the page is being edited elsewhere; the fix itself adds no lint problem.

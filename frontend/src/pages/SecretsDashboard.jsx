@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Clock,
   Copy,
+  History,
   KeyRound,
   ScanSearch,
   ShieldCheck,
