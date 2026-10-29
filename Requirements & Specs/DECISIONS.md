@@ -416,7 +416,8 @@ Record material decisions here. Do not silently change a decision that affects d
 ## ADR-029 — Status history is probed by the scheduler and read publicly
 - **Status:** Accepted, revised the same day three times - the fallback gate keys on recorded data rather than
   configuration, every service carries its own ribbon of bars, the visible copy is rewritten for visitors, and
-  the failed-request panel was renamed a downtime notice (see points 5, 6, 7, 8 and 9)
+  the failed-request panel was renamed a downtime notice (see points 5, 6, 7, 8 and 9); revised again on
+  2026-10-29 to name the worker, not the scheduler, as the process that makes the probe (point 1)
 - **Context:** The public status page inferred the whole banner from one fetch made by the visitor's browser:
   `overall = error ? 'outage' : …`. On the deployed pair that fetch was blocked by a browser content blocker
   (`net::ERR_BLOCKED_BY_CLIENT`) and, at other moments, by Render's cold-start connection close, so the page
@@ -429,7 +430,12 @@ Record material decisions here. Do not silently change a decision that affects d
   1. The **scheduler** authors the record, not the browser. A Beat entry (`vulnix.probe_status`, 60s,
      `app/workers/celery_app.py`) GETs `{VULNIX_STATUS_PROBE_URL}/ready` and stores one `status_probes` row
      per observation (`app/modules/status/service.py:probe`). A visitor reads stored rows, so a blocked or
-     slow browser changes nothing about what the page claims.
+     slow browser changes nothing about what the page claims. Amended when the first production deployment
+     showed this sentence was loose about *who* makes the request: Beat only posts the task, and a worker
+     executes it, so `VULNIX_STATUS_PROBE_URL` is read in the worker's settings object and history needs
+     both processes alive. A worker with that value blank does not fail - `probe_status_task` catches
+     `STATUS_PROBE_NOT_CONFIGURED` and returns 0 as a clean run (`app/workers/tasks.py:38`), which is why
+     this shape produces an empty page with no error anywhere to point at.
   2. The read endpoint is **public**, the write path is not. `GET /api/v1/status` is unauthenticated - it is a
      status page - and rate-limited by client IP (30/min, `app/modules/status/routes.py`). `POST
      /api/v1/status/probe` requires a bearer token, so nobody outside can steer the record or use the API as
