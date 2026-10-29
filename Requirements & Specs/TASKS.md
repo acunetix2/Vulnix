@@ -381,14 +381,31 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       `tests/integration/test_flow.py`.
 - [x] Stop reporting a failed test as a success, which the render of this change caught: `integration.tested`
       and `webhook.tested` carry `metadata.ok`, and the row said "Did not answer" beside a green "Success".
-- [ ] Create the worker service, which is why audits sit at "Queued". The API publishes `vulnix.run_scan` to
-      the same Redis its own readiness check pings (`redis: up`), so the publish succeeds and nothing consumes
-      it; only a worker flips `queued → running`, and there is no timeout or sweeper, so the row waits forever.
-      `render.yaml` declares `vulnix-worker` (`celery -A app.workers.celery_app.celery_app worker -l INFO
-      --concurrency=1`) but the blueprint was never applied to the hand-created API. Jobs already queued are
-      still in Redis (`noeviction`) and start when a worker appears. Confirm from the API log's
-      `scan_enqueued scan_id=…` line before creating it; if a worker does exist, check it received
-      `VULNIX_CELERY_BROKER_URL`, because the shipped default is `redis://localhost:6379/0`.
+- [ ] Establish which process runs an audit on the deployed stack, then finish the worker. The owner's Render
+      dashboard shows **no worker service**, which unproves the earlier reading of this: audits reaching the
+      review step never meant something consumes `vulnix.run_scan`, because `VULNIX_CELERY_EAGER` defaults to
+      `true` in `app/core/config.py:44` and in `.env.example`, and the `false` that routes scans to Celery
+      exists only in `render.yaml`'s env group - which governs nothing for a hand-created API. One search
+      settles it: the API log either has `scan_enqueued scan_id=…` or it does not. Absent while audits still
+      produce findings means the web service ran them inline, inside the ~100-second request Render ends
+      there; present with the audit never leaving `queued` means the API published and nobody consumed.
+      Then create `vulnix-worker` and set `VULNIX_CELERY_EAGER=false` explicitly on the API.
+- [ ] Find out which of the three `AI_MISCONFIGURED` sources the deployed audits are hitting. Audits carry that
+      code while `GET /api/v1/ready` answers `ai_hosted_primary/secondary/tertiary: configured` - and readiness
+      only reports **presence** (`bool(api_key and base_url)`, `app/api/v1/router.py:62`), never a provider
+      asking, so a revoked or wrong-project key reads as configured. Three raises produce the same code, in
+      whichever process ran the review: "No reviewer is configured here." (no key for the reviewer picked),
+      "That reviewer reports no models this account can use." (key present, listing empty), and
+      "The reviewer rejected that request." (`app/ai/providers/ollama.py:155`, a non-retryable 401/403/400 -
+      the one that means the credential is in place and refused). The log separates them
+      (`ai_provider_refused provider=… status=… reason=…`); **the console cannot**, because a scan row stores
+      `error_code` alone and no reason reaches the browser.
+- [ ] Get a Beat scheduler running in production so rows get recorded, **and understand that Beat alone
+      is not enough**. `vulnix.probe_status` is a task the scheduler posts and a worker executes, so
+      history needs both processes alive; a scheduler with no consumer ticks forever and writes nothing.
+      Verified against the live API today: `probing_enabled: true`, `latest: null`, `services: {}`, and
+      `probes: 0` in every bucket of the 24-hour window - no row has ever been written, while
+      `POST /api/v1/status/probe` remains the way to prove the probe path itself.
 - [ ] Show what an audit audited. A scan row resolves to `"{project} audit"`, which is now the item beside
       "Started an audit" but still does not name the file or repository behind it; the upload's own row is the
       only place that detail appears.

@@ -1,6 +1,6 @@
 # Project Progress
 
-**Last updated:** 2026-10-27
+**Last updated:** 2026-10-29
 **Overall status:** Backend MVP implemented and verified (Phase 1–4 backend scope); console UI redesigned; Slack/Jira/webhook integrations implemented end-to-end and off by default; consent-window (OAuth) connections for Slack, Jira and GitHub plus GitHub repository import implemented in the backend; AI review works against a hosted Groq model with a switchable per-workspace selection and a durable credit ledger; the console has a working account surface and a collapsible, nested sidebar
 **Current milestone:** OAuth backend shipped (ADR-010); the Connect-button UI and the credits heatmap remain
 
@@ -1049,3 +1049,60 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
 - Verification: `vite build` succeeds. `npx eslint src/pages/SecretsDashboard.jsx` exits 1 on one
   **pre-existing** unused import (`TableSkeleton`, line 39) that this session did not touch and did not fix,
   because the page is being edited elsewhere; the fix itself adds no lint problem.
+
+## Verification log (2026-10-29, two production symptoms - and the first diagnosis of them being wrong)
+
+- Reported together: audits keep failing `AI_MISCONFIGURED`, and the public status page has shown nothing since
+  the day before "even though I have used the system". Both were first diagnosed against the deployed stack
+  with unauthenticated `GET` requests, then re-opened when the owner's Render dashboard turned out to have
+  **no worker service in it**. The correction is recorded here rather than quietly rewritten.
+- `GET /api/v1/ready` reports `ai_hosted_primary/secondary/tertiary: configured` while audits carry
+  `AI_MISCONFIGURED`. The first reading was "readiness answers from the API, the review runs in the worker, so
+  the worker is missing the key". That is not the only shape left: `/ready` reports **presence**, not
+  acceptance - `configured` is literally `bool(api_key and base_url)` at `app/api/v1/router.py:62`, and the
+  endpoint never asks a provider anything. A revoked key, one from another project, or one pasted with a stray
+  space all report as configured, and the call itself then fails with `AI_MISCONFIGURED`.
+- Why "audits reach the review step" never proved a worker: `VULNIX_CELERY_EAGER` defaults to **`true`**
+  (`app/core/config.py:44`, and `.env.example` says the same), and the `false` that routes scans to Celery only
+  exists in `render.yaml`'s env group - which governs nothing for a hand-created API. With the variable unset,
+  `enqueue_scan` calls `run_scan_task` **inside the request** (`app/integrations/queue/dispatch.py:15`) and
+  emits no `scan_enqueued` line at all, so an audit can read the archive, reach the review step and fail there
+  while no worker exists. The corollary is worse than the error: those audits are inside the ~100-second window
+  Render ends on a web request, however the code's own 900-second ceiling is set.
+- One search settles which process is involved, and it is the operator's, not ours: look for `scan_enqueued` in
+  the API log. Absent while audits still produce findings = inline, no worker. Present with the audit never
+  leaving `queued` = published into an empty queue. Either way the next step is to create `vulnix-worker` and
+  set `VULNIX_CELERY_EAGER=false` explicitly on the API.
+- The reason this took two rounds is a real gap, not operator error: a scan row stores `error_code` and nothing
+  else, so the console cannot show *why*. Three raises produce that one code - "No reviewer is configured
+  here." (no key where the review ran), "That reviewer reports no models this account can use." (key present,
+  listing empty), and "The reviewer rejected that request." at `app/ai/providers/ollama.py:155` (a non-retryable
+  401/403/400, which is the one that means the credential is in place and refused). Only the log separates
+  them, as `ai_provider_refused provider=… status=… reason=…`.
+- `GET /api/v1/status` re-checked while writing: `probing_enabled: true`, `latest: null`, `services: {}` and
+  `probes: 0` in all 60 buckets of the 24-hour window. Not "history expired" - a row has never been written.
+  Using the product cannot write one, because audits do not touch the status tables. This half of the diagnosis
+  stands, and it does not depend on which process runs audits.
+- Also verified in code while writing the runbook: under `VULNIX_APP_ENV=production` the settings object
+  refuses to build without a Supabase JWKS URL or JWT secret, and refuses `VULNIX_INTEGRATIONS_ENABLED=true`
+  without an `VULNIX_INTEGRATION_SECRET_KEY` (`app/core/config.py:234`). So a service that is *up* holds the
+  variables the validator checks - which narrows what a blank can mean without a symptom at boot.
+- The status page itself is not broken. Its live look was read off the deployed host and works - the headline,
+  the per-service rows and the component states come from the browser fallback. Only the history ribbon is
+  empty. The owner chose to record real history by running Beat rather than have the page invent it, so
+  ADR-029 (server-probed history, browser-recorded history explicitly rejected) still stands as the decision;
+  only its point 1 was amended, to name the worker as the process that makes the probe - Beat posts
+  `vulnix.probe_status` and a worker executes it, so `VULNIX_STATUS_PROBE_URL` is read in the worker, and a
+  blank there makes `probe_status_task` catch `STATUS_PROBE_NOT_CONFIGURED` and return 0 as a clean run
+  (`app/workers/tasks.py:38`). The first draft of the new runbook section assigned that variable to the
+  scheduler, which is the mistake that would have kept the page empty forever with no error anywhere.
+- Stopgap that is true today: `POST /api/v1/status/probe` (authenticated, because it makes an outbound request
+  and writes the result) runs the same check inside the API process, which does hold the origin, so an operator
+  can watch a row appear before Beat exists. It is a manual row, not a history.
+- Recorded in `DEPLOYMENT.md` as two new sections - "Three processes, one set of variables" (per-service matrix,
+  the boot-validator corollary, and the unset-eager trap) and "Proving which process is missing what" (6 checks,
+  starting with which process ran the audit). `TASKS.md`: the item that claimed the worker was created is
+  reopened, and the credential item was rewritten around the three sources of one code.
+- Not claimed: nothing was created in the Render dashboard from here, no AI call was made, and no claim is made
+  about the visual layout of the deployed status page - viewport screenshots still return 0x0 in this
+  environment, so this is response-body, log-text and source evidence only.
