@@ -436,6 +436,9 @@ def _resource_labels(db, events: list[AuditEvent]) -> dict[str, str]:
         for event in events
         if event.resource_id and event.resource_type == "workspace_member"
     }
+    upload_ids = {
+        event.resource_id for event in events if event.resource_id and event.resource_type == "upload"
+    }
     if project_ids:
         labels.update(
             db.execute(select(Project.id, Project.name).where(Project.id.in_(project_ids))).all()
@@ -460,6 +463,14 @@ def _resource_labels(db, events: list[AuditEvent]) -> dict[str, str]:
                 user_id: f"@{username}" if username else display_name or "Workspace member"
                 for user_id, username, display_name in rows
             }
+        )
+    if upload_ids:
+        # The filename is what an upload row is about - "Upload created" answers
+        # nothing. It is stored on the row, so a deleted upload still resolves.
+        labels.update(
+            db.execute(
+                select(Upload.id, Upload.original_filename).where(Upload.id.in_(upload_ids))
+            ).all()
         )
     for event in events:
         if (

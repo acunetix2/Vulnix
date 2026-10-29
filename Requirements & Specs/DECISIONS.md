@@ -521,6 +521,56 @@ Record material decisions here. Do not silently change a decision that affects d
   background card and friendly messages not scarry red even when the system is down"; "we should be able to see
   the history of system status too"), with the storage approach chosen from three options offered.
 
+## ADR-030 — The audit log reads as person, verb, thing
+- **Status:** Accepted
+- **Context:** The Activity column built its sentence as `<resource> <verb>`, so the thing acted on was put in
+  the actor's seat. Real rows from the deployed console read "Genmax selected a model" (Genmax is the reviewer
+  that was chosen), "@james added a member" (james is the person who was added, by someone else in the very
+  column that already names them), "Zorora audit created" (Zorora is the project). An upload row read "Upload
+  created" over an affected item of "Upload", which answers no question a reader could ask: the file had a name,
+  a size and an origin, and none of the three appeared. The root cause is one fallback chain
+  (`resource_label || metadata.name || metadata.provider || metadata.reviewer || humanize(resource_type)`)
+  shared by the sentence and the item column, so whichever field happened to exist became the subject.
+- **Decision:**
+  1. The Activity column is **only ever a verb phrase**. The Person column already names who did it, so the
+     sentence is "Uploaded code to audit", "Started an audit", "Added a member", "Chose a reviewer". All thirty
+     actions the service writes are listed explicitly; an action with no entry falls back to verb plus resource
+     type (`project.transferred` → "Transferred project"), which is grammatical in the same order, so a new
+     backend action degrades to readable rather than to nonsense.
+  2. The Affected item column carries **the noun plus the one detail that makes the row answer a question**:
+     filename with size and origin for an upload, reviewer alias, member handle with their role, provider with
+     its OAuth scope, webhook host with its event count, triage status, report format.
+  3. Upload filenames are resolved **server-side**, in `_resource_labels`, from the `Upload` row rather than
+     from event metadata. That means rows written before this change gain the detail on the next read, and an
+     upload that has since been deleted still resolves, because the row keeps `original_filename`.
+  4. A test that failed is **not reported as a success**. `integration.tested` and `webhook.tested` carry
+     `metadata.ok`, and the Outcome pill now reads that first - the render of this change is what caught the
+     contradiction of a row saying "Did not answer" beside a green "Success". The same applies to
+     `scan.completed`, which the pipeline writes with the audit's own end state in `metadata.status`: a failed
+     audit reads "Failed" and one that finished with warnings reads "Needs review", because a pill that keys only
+     on the action suffix cannot see a failure inside a successfully-recorded event.
+- **Alternatives considered:** putting the detail into event metadata at write time (rejected as the only
+  mechanism - it would leave every existing row sparse and would duplicate data the rows already hold, though
+  `size_bytes` and `source` were already there and are used); one sentence per row with the resource embedded in
+  it, dropping the third column (rejected - the column is where a long filename can be truncated and given a
+  title attribute, and it keeps the Activity column scannable as a list of verbs); rendering the raw `action`
+  string for unknown actions (rejected - it is the internal vocabulary the same owner asked to have removed
+  from user-facing surfaces).
+- **Security implications:** filenames are untrusted user input, so they are rendered as React text (escaped)
+  with `truncate` and a `title`, never as markup, and they never enter a shell or a path here - the storage
+  layer already replaced the name with a generated key at intake and kept the original as metadata only. The
+  upload's *size* and *origin* are safe aggregates. No identifier is exposed: `resource_id` stays out of the
+  payload's rendered columns, and member handles come from the same resolver that already refuses to show a
+  UUID. The log remains workspace-admin-only (`403` otherwise), which is what makes a webhook host and an OAuth
+  scope acceptable here when they would not be on a public page.
+- **Consequences:** adding a backend action means adding one line to `ACTIVITIES` to get the phrasing the team
+  would say out loud; without it the row still reads correctly, just generically. The detail is bounded by what
+  each route records, so a future action that wants richer wording needs its metadata enriched at the write
+  site, not a client-side guess. `itemOf` is a per-family switch, which is deliberately more code than the
+  single fallback chain it replaced - the chain was the bug.
+- **Date / owner:** 2026-10-29 / requested by the owner looking at the deployed log ("explanation of the action
+  should be making sense e.g what was uploaded etc").
+
 ## Decision template
 ### ADR-NNN — Short title
 - **Status:** Proposed / Accepted / Superseded

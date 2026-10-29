@@ -977,3 +977,43 @@ checkpoint `failed AI_MISCONFIGURED`, three optional tools `skipped`, and an exe
   rebuilt with the normal API base.
 - Verification: `npx eslint src/pages/landing/resources/SystemStatus.jsx` exits 0 and `vite build` succeeds.
   Frontend copy only - no backend file, no aggregation, no test changed - so **398 passed** still stands.
+
+## Verification log (2026-10-29, the audit log reads as person did what to which thing)
+
+- Asked of the deployed log: "explanation of the action should be making sense e.g what was uploaded etc". Six
+  rows were visible and four of them restated the actor instead of naming the action - "Genmax selected a model"
+  with "Genmax" in the item column, "@james added a member" beside "@james", "Zorora audit created", and an
+  upload row that said only "Upload created" next to "Upload". The Activity column had been assembled as
+  `<resource> <verb>`, which puts the thing acted on in the actor's seat.
+- Restructured against ADR-030: Activity is a verb phrase read from an explicit map of the thirty actions this
+  service writes (`upload.created` → "Uploaded code to audit", `scan.started` → "An audit began running"), with a
+  grammatical fallback for anything unmapped, and the Affected item column carries the noun plus the single line
+  of detail that answers something - file and size, reviewer and what it now does, member and role, provider and
+  scope, findings and outcome.
+- The upload row was the specific complaint, so it is resolved server-side rather than in the browser:
+  `_resource_labels` now joins `upload` rows to `Upload.original_filename`. Because the filename is stored on the
+  row, a log written before this change gains the detail on its next read, and a deleted upload still resolves.
+  Asserted in `tests/integration/test_flow.py` on the real API response, not on a fixture.
+- The isolated render caught a second bug, in the outcome pill rather than the prose: a Slack test that did not
+  answer rendered "Did not answer" beside a green "Success", because `outcomeOf` only looked at the action
+  suffix and `.tested` never ends in `.failed`. It now reads `metadata.ok`, and for `scan.completed` - the action
+  the pipeline writes with the scan's own status in the metadata - it maps `failed`, `cancelled` and
+  `completed_with_errors` to the matching pill instead of defaulting to Success. Two `ACTIVITIES` keys were
+  removed while doing this: I had guessed at `scan.completed_with_errors` and `scan.failed` as actions, and the
+  pipeline shows they are never written. Guessing at an action name is the failure mode this whole column had.
+- Not claimed: whether the item column truncates gracefully. `take_screenshot` returns
+  `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE` with a 0x0 viewport in this environment and every measured element width
+  comes back 0, so only the rendered text is evidence here, not the layout.
+- Rendered twelve rows in an isolated preview on 5302 - the component itself, with only `services/api` replaced
+  by twelve fixtures shaped like the real response, because the console cannot be opened without a real token.
+  Read off the page: `Uploaded code to audit | genmax-backend.zip · 4.6 MB · uploaded as a ZIP | Success`,
+  `Uploaded code to audit | acme-shop-main.zip · 959 KB · from a GitHub repository | Success`,
+  `An audit finished | Zorora audit · 3 findings | Needs review`, `An audit finished | Genmax audit · 1 finding |
+  Success`, `An audit finished | Quiet audit · 0 findings | Failed`, `Tested an integration | Slack · Did not
+  answer | Failed`, `Added a member | @james · Member access granted`, `Chose a reviewer | Genmax · Reads the
+  next audits`. The unmapped fallback was exercised too: `project.transferred` rendered "Transferred project".
+- The preview process was stopped by PID after confirming from its command line that it was the harness, its port
+  was then free, and the throwaway directory was deleted; `frontend/dist` was rebuilt with the normal API base.
+- Verification: `npx eslint` on the component exits 0, `vite build` succeeds, `pytest tests/integration/test_flow
+ .py` is **12 passed** against the current tree, and the full suite run covering the backend change is
+  **398 passed, 2 warnings in 685.15s (0:11:25)**.

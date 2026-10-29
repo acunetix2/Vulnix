@@ -92,6 +92,12 @@ def test_full_scan_flow(client, login, fake_scanner, make_zip) -> None:
     }
     assert expected <= actions
 
+    # An upload row has to name the thing uploaded, or the log says nothing.
+    uploaded = next(e for e in audit["items"] if e["action"] == "upload.created")
+    assert uploaded["resource_label"] == "source.zip"
+    assert uploaded["metadata"]["source"] == "upload"
+    assert uploaded["metadata"]["size_bytes"] > 0
+
 
 def test_audit_events_filter_by_action_group(client, login, project_factory) -> None:
     login()
