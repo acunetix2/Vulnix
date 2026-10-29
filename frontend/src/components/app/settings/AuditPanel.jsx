@@ -60,6 +60,45 @@ const VERBS = {
   generated: 'generated',
 }
 
+const PROVIDERS = { github: 'GitHub', slack: 'Slack', jira: 'Jira' }
+
+// The Person column already names who did it, so the Activity column is only
+// ever the verb phrase - "Started an audit", not "Zorora audit created", which
+// reads as a thing called Zorora audit having done a creating. Every action the
+// service writes is listed; anything unmapped falls back to verb plus resource.
+const ACTIVITIES = {
+  'ai.model_selected': 'Chose a reviewer',
+  'finding.explained': 'Asked for a finding to be explained',
+  'finding.triaged': 'Triaged a finding',
+  'integration.connected': 'Connected an app',
+  'integration.deleted': 'Removed an integration',
+  'integration.disconnected': 'Disconnected an app',
+  'integration.redelivered': 'Sent a delivery again',
+  'integration.tested': 'Tested an integration',
+  'integration.updated': 'Changed an integration',
+  'project.created': 'Created a project',
+  'project.deleted': 'Deleted a project',
+  'project.updated': 'Changed a project',
+  'report.exported': 'Exported a report',
+  'report.shared': 'Shared a report',
+  'scan.cancelled': 'Stopped an audit',
+  'scan.completed': 'An audit finished',
+  'scan.created': 'Started an audit',
+  'scan.started': 'An audit began running',
+  'upload.created': 'Uploaded code to audit',
+  'upload.deleted': 'Deleted an upload',
+  'webhook.created': 'Added a webhook',
+  'webhook.deleted': 'Deleted a webhook',
+  'webhook.secret_rotated': 'Rotated a webhook signing key',
+  'webhook.tested': 'Tested a webhook',
+  'webhook.updated': 'Changed a webhook',
+  'workspace.created': 'Created this workspace',
+  'workspace.member_added': 'Added a member',
+  'workspace.member_removed': 'Removed a member',
+  'workspace.member_role_changed': "Changed a member's role",
+  'workspace.updated': 'Changed workspace settings',
+}
+
 const humanize = (value) =>
   String(value || '')
     .split(/[._]/)
@@ -67,17 +106,84 @@ const humanize = (value) =>
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ')
 
+const capitalize = (value) => value.charAt(0).toUpperCase() + value.slice(1)
+
 function activityOf(event) {
+  const known = ACTIVITIES[event.action]
+  if (known) return known
   const [, ...parts] = String(event.action || '').split('.')
   const verbKey = parts.join('_')
   const verb = VERBS[verbKey] || humanize(verbKey).toLowerCase()
-  const subject =
-    event.resource_label ||
-    event.metadata?.name ||
-    event.metadata?.provider ||
-    event.metadata?.reviewer ||
-    humanize(event.resource_type)
-  return `${subject} ${verb}`
+  return capitalize(`${verb} ${humanize(event.resource_type).toLowerCase()}`)
+}
+
+function formatBytes(value) {
+  const size = Number(value)
+  if (!Number.isFinite(size) || size <= 0) return null
+  if (size < 1024) return `${size} B`
+  const units = ['KB', 'MB', 'GB']
+  let scaled = size / 1024
+  let unit = 0
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024
+    unit += 1
+  }
+  return `${scaled >= 10 ? Math.round(scaled) : scaled.toFixed(1)} ${units[unit]}`
+}
+
+const joinParts = (parts) => parts.filter(Boolean).join(' · ') || null
+
+/**
+ * What the action happened to, and the one line of detail that makes the row
+ * answer a question rather than restate it: which file and how big, which
+ * reviewer, which member and as what, which app.
+ */
+function itemOf(event) {
+  const meta = event.metadata || {}
+  const named =
+    event.resource_label || meta.name || meta.provider || meta.reviewer || humanize(event.resource_type)
+
+  if (event.action === 'upload.created') {
+    return {
+      primary: named,
+      detail: joinParts([
+        formatBytes(meta.size_bytes),
+        meta.source === 'github' ? 'from a GitHub repository' : 'uploaded as a ZIP',
+      ]),
+    }
+  }
+  if (event.action === 'ai.model_selected') {
+    return { primary: meta.reviewer || named, detail: 'Reads the next audits' }
+  }
+  if (event.action === 'scan.completed') {
+    const findings = Number(meta.findings)
+    return {
+      primary: named,
+      detail: Number.isFinite(findings) ? `${findings} finding${findings === 1 ? '' : 's'}` : null,
+    }
+  }
+  if (event.action === 'finding.triaged') {
+    return { primary: named, detail: meta.status ? `Set to ${humanize(meta.status)}` : null }
+  }
+  if (event.action === 'report.exported') {
+    return { primary: named, detail: meta.format ? `${String(meta.format).toUpperCase()} file` : null }
+  }
+  if (event.action === 'integration.tested' || event.action === 'webhook.tested') {
+    return {
+      primary: PROVIDERS[meta.provider] || meta.host || named,
+      detail: meta.ok === undefined ? null : meta.ok ? 'Answered' : 'Did not answer',
+    }
+  }
+  if (groupOf(event.action) === 'integration') {
+    return { primary: PROVIDERS[meta.provider] || named, detail: meta.scope || null }
+  }
+  if (groupOf(event.action) === 'webhook') {
+    return {
+      primary: meta.host || named,
+      detail: Array.isArray(meta.events) && meta.events.length ? `${meta.events.length} events` : null,
+    }
+  }
+  return { primary: named, detail: null }
 }
 
 function roleChangeOf(event) {
@@ -88,6 +194,19 @@ function roleChangeOf(event) {
 
 function outcomeOf(event) {
   const action = String(event.action || '')
+  // A test that came back is not a test that passed: the integration and webhook
+  // test events carry the answer itself, and it would contradict the row's own
+  // detail line to call a "did not answer" a success.
+  if (event.metadata?.ok === false) return 'Failed'
+  // An audit that finished is not necessarily one that came out clean, and the
+  // action name cannot tell them apart - the pipeline records which it was.
+  if (action === 'scan.completed') {
+    const ended = event.metadata?.status
+    if (ended === 'failed') return 'Failed'
+    if (ended === 'cancelled') return 'Cancelled'
+    if (ended === 'completed_with_errors') return 'Needs review'
+    return 'Success'
+  }
   if (action.endsWith('.failed')) return 'Failed'
   if (action.endsWith('.cancelled')) return 'Cancelled'
   if (action.endsWith('.queued') || action.endsWith('.started')) return 'In progress'
@@ -406,50 +525,50 @@ export function AuditPanel({ workspaceId }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {events.map((event) => (
-                  <TableRow key={event.id}>
-                    <TableCell className="font-medium">
-                      <ActorLabel label={event.actor_label} />
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-foreground">{activityOf(event)}</span>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {event.resource_label ||
-                        event.metadata?.name ||
-                        event.metadata?.provider ||
-                        event.metadata?.reviewer ||
-                        humanize(event.resource_type)}
-                      {roleChangeOf(event) !== '—' && (
-                        <span className="mt-0.5 block text-xs text-muted-foreground">
-                          {roleChangeOf(event)}
+                {events.map((event) => {
+                  const item = itemOf(event)
+                  const role = roleChangeOf(event)
+                  return (
+                    <TableRow key={event.id}>
+                      <TableCell className="font-medium">
+                        <ActorLabel label={event.actor_label} />
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm text-foreground">{activityOf(event)}</span>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        <span className="block truncate text-foreground" title={item.primary}>
+                          {item.primary}
                         </span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <span
-                        className={cn(
-                          'rounded-full px-2 py-1 text-[10px] font-medium',
-                          outcomeTone(outcomeOf(event))
+                        {(item.detail || role !== '—') && (
+                          <span className="mt-0.5 block text-xs">{item.detail || role}</span>
                         )}
+                      </TableCell>
+                      <TableCell>
+                        <span
+                          className={cn(
+                            'rounded-full px-2 py-1 text-[10px] font-medium',
+                            outcomeTone(outcomeOf(event))
+                          )}
+                        >
+                          {outcomeOf(event)}
+                        </span>
+                      </TableCell>
+                      <TableCell
+                        className="whitespace-nowrap text-xs text-muted-foreground"
+                        title={formatTimestamp(event.created_at)}
                       >
-                        {outcomeOf(event)}
-                      </span>
-                    </TableCell>
-                    <TableCell
-                      className="whitespace-nowrap text-xs text-muted-foreground"
-                      title={formatTimestamp(event.created_at)}
-                    >
-                      <span>{formatDate(event.created_at)}</span>
-                      <span className="mt-0.5 block tabular-nums">
-                        {new Intl.DateTimeFormat(undefined, {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        }).format(new Date(event.created_at))}
-                      </span>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                        <span>{formatDate(event.created_at)}</span>
+                        <span className="mt-0.5 block tabular-nums">
+                          {new Intl.DateTimeFormat(undefined, {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          }).format(new Date(event.created_at))}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           </div>

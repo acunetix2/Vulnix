@@ -346,13 +346,16 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       is exactly the condition under which a missing worker and a missing beat process look identical from the
       console. Create (or redeploy) a service running
       `celery -A app.workers.celery_app.celery_app beat -l INFO` with the same env, then confirm a row appears.
-- [ ] Trigger both hosts to build from `dev`. Neither has picked up a commit since `facfdc9`: Pages still serves
-      `index-BSM327nQ.js` and the Render API still answers `/api/v1/status` without the `services` field, so the
-      status page cannot show what is already merged until each service deploys the current branch (or auto-deploy
-      is switched on). The same applies to the CORS fix in `b186854`, which is what blocks starting an audit from
-      the deployed console (task #95). To tell which commit a live bundle was built from, grep it for
-      `History for` - the aria-label the current rows use (it was `Recorded history for` until the ribbon
-      change, so a miss on the older string means nothing about a build made after it).
+- [x] Trigger both hosts to build from `dev`. Both had simply not been observed long enough - auto-deploy is on
+      for each. Verified on 2026-10-29: Pages serves `index-CcIWd12e.js`, which contains
+      `We are experiencing downtime` (1) and no `This page could not load` (0), so it is built from `c066a22`;
+      the Render API now answers `/api/v1/status` with the `services` field; and `OPTIONS
+      /api/v1/projects/{id}/scans` returns 200 with `access-control-allow-origin:
+      https://vulnix.aventorgo.xyz` and `Idempotency-Key` in the allow-headers list, which is the CORS fix
+      `b186854` running in production. That clears the deploy half of task #95.
+      To tell which commit a live bundle was built from, grep it for `History for` - the aria-label the current
+      rows use (it was `Recorded history for` until the ribbon change, so a miss on the older string means
+      nothing about a build made after it).
 - [x] Keep the scheduler as the only author of observations. Offered alternatives were letting the read path
       record one when the newest observation is stale (self-healing without a new service, but it puts an
       outbound fetch inside visitor requests and would revise ADR-029) or leaving the page in live-fallback
@@ -363,6 +366,36 @@ Scope beyond the current PRD, so each item below needs a decision recorded in `D
       service over the public URL, so it can report reachable while a specific visitor's route cannot. An
       external prober (or the browser's own latency shown more prominently) is the honest fix if that ever
       matters to customers.
+
+## Requested 2026-10-29 — the audit log says what happened
+- [x] Make every row read as *person did what to which thing*. The Activity column had been built as
+      `<resource> <verb>`, so the deployed log read "Genmax selected a model", "@james added a member" and
+      "Zorora audit created" - the acted-on thing in the actor's seat - while an upload row said only "Upload
+      created". Activity is now a verb phrase from an explicit map of all thirty actions the service writes,
+      with a grammatical fallback for anything unmapped, and the Affected item column carries the noun plus the
+      one detail that answers a question (ADR-030).
+- [x] Name the uploaded file. `_resource_labels` resolves `upload` rows to `original_filename`, so the item
+      column reads `genmax-backend.zip` with `4.6 MB · uploaded as a ZIP` (or `· from a GitHub repository`)
+      beneath it. Resolved server-side rather than from metadata, so rows written before this change gain the
+      detail on their next read and a deleted upload still resolves. Covered by an assertion in
+      `tests/integration/test_flow.py`.
+- [x] Stop reporting a failed test as a success, which the render of this change caught: `integration.tested`
+      and `webhook.tested` carry `metadata.ok`, and the row said "Did not answer" beside a green "Success".
+- [ ] Create the worker service, which is why audits sit at "Queued". The API publishes `vulnix.run_scan` to
+      the same Redis its own readiness check pings (`redis: up`), so the publish succeeds and nothing consumes
+      it; only a worker flips `queued → running`, and there is no timeout or sweeper, so the row waits forever.
+      `render.yaml` declares `vulnix-worker` (`celery -A app.workers.celery_app.celery_app worker -l INFO
+      --concurrency=1`) but the blueprint was never applied to the hand-created API. Jobs already queued are
+      still in Redis (`noeviction`) and start when a worker appears. Confirm from the API log's
+      `scan_enqueued scan_id=…` line before creating it; if a worker does exist, check it received
+      `VULNIX_CELERY_BROKER_URL`, because the shipped default is `redis://localhost:6379/0`.
+- [ ] Show what an audit audited. A scan row resolves to `"{project} audit"`, which is now the item beside
+      "Started an audit" but still does not name the file or repository behind it; the upload's own row is the
+      only place that detail appears.
+- [ ] Name the finding. `_resource_labels` resolves projects, scans, workspaces, members and uploads, but not
+      findings, so a triage row renders the generic "Finding" beside "Set to False Positive". It reads as a
+      category rather than a nonsense sentence, which is why it is listed instead of fixed here - the resolver
+      needs a `Finding` join to reach a title, and the slice asked for was the upload.
 
 ## Working agreement
 Do not start the next phase merely because the previous phase's code exists. Confirm tests, acceptance criteria, security review, and documentation updates first.
